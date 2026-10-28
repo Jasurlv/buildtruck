@@ -1,0 +1,17 @@
+{
+  "name": "buildtruck-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "site-attendance-backend",
+    "site-attendance-admin"
+  ],
+  "scripts": {
+    "api": "npm --prefix site-attendance-backend run dev",
+    "web": "npm --prefix site-attendance-admin run dev",
+    "dev": "concurrently \"npm run api\" \"npm run web\""
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6"
+  }
+}
