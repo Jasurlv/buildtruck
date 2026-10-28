@@ -2,13 +2,19 @@ import { Router, Request, Response } from "express";
 import pool from "../db/pool.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import { getJwtSecret } from "../config.js";
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || "buildtruck_super_secret_key_2026";
 
 // Worker Login Route
 router.post("/login", async (req: Request, res: Response): Promise<any> => {
-  const { username, password } = req.body;
+  const username =
+    typeof req.body?.username === "string" ? req.body.username.trim() : "";
+  const password =
+    typeof req.body?.password === "string" ? req.body.password : "";
+  if (!username || !password) {
+    return res.status(400).json({ error: "Username and password are required" });
+  }
 
   try {
     const result = await pool.query(
@@ -32,8 +38,8 @@ router.post("/login", async (req: Request, res: Response): Promise<any> => {
 
     // Generate token for worker
     const token = jwt.sign(
-      { id: worker.id, username: worker.username, role: "worker" },
-      JWT_SECRET,
+      { workerId: Number(worker.id), username: worker.username, role: "worker" },
+      getJwtSecret(),
       { expiresIn: "7d" }, // Longer session for mobile workers
     );
 

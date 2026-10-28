@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import pool from "../db/pool.js";
+import { getAuthenticatedWorkerId, requireRole } from "../middleware/auth.js";
 
 const router = Router();
 
@@ -26,14 +27,17 @@ function calculateDistance(
 
 // 0. GET ACTIVE ATTENDANCE (Required for Mobile App to check active status)
 router.get(
-  "/active/:workerId",
+  "/active",
+  requireRole("worker"),
   async (req: Request, res: Response): Promise<any> => {
-    const { workerId } = req.params;
-    const today = new Date().toISOString().split("T")[0];
+    const workerId = getAuthenticatedWorkerId(req);
     try {
       const result = await pool.query(
-        `SELECT * FROM attendance_logs WHERE worker_id = $1 AND work_date = $2 AND end_work_time IS NULL`,
-        [workerId, today],
+        `SELECT * FROM attendance_logs
+         WHERE worker_id = $1 AND end_work_time IS NULL
+         ORDER BY punch_in_time DESC
+         LIMIT 1`,
+        [workerId],
       );
       return res.json({ activeShift: result.rows[0] || null });
     } catch (err) {
@@ -43,10 +47,48 @@ router.get(
   },
 );
 
+router.get(
+  "/history",
+  requireRole("worker"),
+  async (req: Request, res: Response): Promise<any> => {
+    const workerId = getAuthenticatedWorkerId(req);
+    try {
+      const result = await pool.query(
+        `SELECT a.id, w.full_name, a.punch_in_time, a.lunch_start_time,
+                a.lunch_end_time, a.end_work_time, a.total_worked_hours,
+                a.daily_earned
+         FROM attendance_logs a
+         JOIN workers w ON w.id = a.worker_id
+         WHERE a.worker_id = $1 AND a.end_work_time IS NOT NULL
+         ORDER BY a.punch_in_time DESC`,
+        [workerId],
+      );
+      return res.json({ shifts: result.rows });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: "Failed to fetch work history" });
+    }
+  },
+);
+
 // 1. PUNCH IN (Start Day) - Checks Geofence Radius (supports 100m drift buffer if configured)
-router.post("/punch-in", async (req: Request, res: Response): Promise<any> => {
+router.post(
+  "/punch-in",
+  requireRole("worker"),
+  async (req: Request, res: Response): Promise<any> => {
   try {
-    const { worker_id, latitude, longitude } = req.body;
+    const workerId = getAuthenticatedWorkerId(req);
+    const { latitude, longitude } = req.body;
+    if (
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(longitude) ||
+      latitude < -90 ||
+      latitude > 90 ||
+      longitude < -180 ||
+      longitude > 180
+    ) {
+      return res.status(400).json({ error: "Valid location coordinates are required" });
+    }
     const today = new Date().toISOString().split("T")[0];
 
     // Get worker and their assigned building info
@@ -55,7 +97,7 @@ router.post("/punch-in", async (req: Request, res: Response): Promise<any> => {
        FROM workers w 
        JOIN buildings b ON w.assigned_building_id = b.id 
        WHERE w.id = $1`,
-      [worker_id],
+      [workerId],
     );
 
     if (workerRes.rows.length === 0) {
@@ -83,21 +125,22 @@ router.post("/punch-in", async (req: Request, res: Response): Promise<any> => {
       });
     }
 
-    // Check if already punched in today
+    // Prevent duplicate active shifts while allowing multiple shifts per day.
     const existingLog = await pool.query(
-      "SELECT * FROM attendance_logs WHERE worker_id = $1 AND work_date = $2",
-      [worker_id, today],
+      `SELECT id FROM attendance_logs
+       WHERE worker_id = $1 AND end_work_time IS NULL`,
+      [workerId],
     );
 
     if (existingLog.rows.length > 0) {
-      return res.status(400).json({ error: "Already punched in for today" });
+      return res.status(400).json({ error: "A shift is already active" });
     }
 
     // Insert attendance log
     const newLog = await pool.query(
       `INSERT INTO attendance_logs (worker_id, building_id, work_date, punch_in_time, status)
        VALUES ($1, $2, $3, NOW(), 'Present') RETURNING *`,
-      [worker_id, worker.building_id, today],
+      [workerId, worker.building_id, today],
     );
 
     return res
@@ -107,21 +150,28 @@ router.post("/punch-in", async (req: Request, res: Response): Promise<any> => {
     console.error(err);
     return res.status(500).json({ error: "Server error during punch in" });
   }
-});
+  },
+);
 
 // 2. START LUNCH
 router.post(
   "/lunch-start",
+  requireRole("worker"),
   async (req: Request, res: Response): Promise<any> => {
     try {
-      const { worker_id } = req.body;
-      const today = new Date().toISOString().split("T")[0];
+      const workerId = getAuthenticatedWorkerId(req);
 
       const updated = await pool.query(
         `UPDATE attendance_logs 
        SET lunch_start_time = NOW() 
-       WHERE worker_id = $1 AND work_date = $2 RETURNING *`,
-        [worker_id, today],
+       WHERE id = (
+         SELECT id FROM attendance_logs
+         WHERE worker_id = $1 AND end_work_time IS NULL
+         ORDER BY punch_in_time DESC
+         LIMIT 1
+       )
+       RETURNING *`,
+        [workerId],
       );
 
       if (updated.rows.length === 0) {
@@ -139,16 +189,24 @@ router.post(
 );
 
 // 3. END LUNCH
-router.post("/lunch-end", async (req: Request, res: Response): Promise<any> => {
-  try {
-    const { worker_id } = req.body;
-    const today = new Date().toISOString().split("T")[0];
+router.post(
+  "/lunch-end",
+  requireRole("worker"),
+  async (req: Request, res: Response): Promise<any> => {
+    try {
+      const workerId = getAuthenticatedWorkerId(req);
 
     const updated = await pool.query(
       `UPDATE attendance_logs 
        SET lunch_end_time = NOW() 
-       WHERE worker_id = $1 AND work_date = $2 RETURNING *`,
-      [worker_id, today],
+       WHERE id = (
+         SELECT id FROM attendance_logs
+         WHERE worker_id = $1 AND end_work_time IS NULL
+         ORDER BY punch_in_time DESC
+         LIMIT 1
+       )
+       RETURNING *`,
+      [workerId],
     );
 
     if (updated.rows.length === 0) {
@@ -161,27 +219,35 @@ router.post("/lunch-end", async (req: Request, res: Response): Promise<any> => {
       message: "Lunch ended. Back to work!",
       log: updated.rows[0],
     });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "Server error ending lunch" });
-  }
-});
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: "Server error ending lunch" });
+    }
+  },
+);
 
 // 4. END WORK (Calculate Total Hours & Daily Pay with Late Penalty rules)
-router.post("/end-work", async (req: Request, res: Response): Promise<any> => {
+router.post(
+  "/end-work",
+  requireRole("worker"),
+  async (req: Request, res: Response): Promise<any> => {
   try {
-    const { worker_id } = req.body;
-    const today = new Date().toISOString().split("T")[0];
+    const workerId = getAuthenticatedWorkerId(req);
 
     const logRes = await pool.query(
-      "SELECT * FROM attendance_logs WHERE worker_id = $1 AND work_date = $2",
-      [worker_id, today],
+      `SELECT a.*, w.hourly_rate
+       FROM attendance_logs a
+       JOIN workers w ON w.id = a.worker_id
+       WHERE a.worker_id = $1 AND a.end_work_time IS NULL
+       ORDER BY a.punch_in_time DESC
+       LIMIT 1`,
+      [workerId],
     );
 
     if (logRes.rows.length === 0) {
       return res
         .status(404)
-        .json({ error: "No attendance record found for today" });
+        .json({ error: "No active shift found for today" });
     }
 
     const log = logRes.rows[0];
@@ -190,11 +256,13 @@ router.post("/end-work", async (req: Request, res: Response): Promise<any> => {
 
     let workedMs = endWork.getTime() - punchIn.getTime();
 
-    // Subtract lunch time if taken (default 1 hour = 3600000ms if not explicitly ended)
-    if (log.lunch_start_time && log.lunch_end_time) {
+    // Subtract the recorded lunch, or the default one-hour break when none was recorded.
+    if (log.lunch_start_time) {
+      const lunchEnd = log.lunch_end_time
+        ? new Date(log.lunch_end_time)
+        : endWork;
       const lunchMs =
-        new Date(log.lunch_end_time).getTime() -
-        new Date(log.lunch_start_time).getTime();
+        lunchEnd.getTime() - new Date(log.lunch_start_time).getTime();
       workedMs -= lunchMs;
     } else {
       workedMs -= 3600000; // deduct standard 1 hour lunch
@@ -205,15 +273,23 @@ router.post("/end-work", async (req: Request, res: Response): Promise<any> => {
       parseFloat((workedMs / (1000 * 60 * 60)).toFixed(2)),
     );
 
-    // Hourly rate example: €6.25/hr
-    const hourlyRate = 6.25;
+    const workerHourlyRate = Number(log.hourly_rate);
+    const hourlyRate =
+      Number.isFinite(workerHourlyRate) && workerHourlyRate >= 0
+        ? workerHourlyRate
+        : 6.25;
     const dailyEarned = parseFloat((workedHours * hourlyRate).toFixed(2));
 
     const finalUpdate = await pool.query(
       `UPDATE attendance_logs 
-       SET end_work_time = NOW(), total_worked_hours = $1, daily_earned = $2, status = 'Completed'
-       WHERE worker_id = $3 AND work_date = $4 RETURNING *`,
-      [workedHours, dailyEarned, worker_id, today],
+       SET end_work_time = $1,
+           lunch_end_time = CASE
+             WHEN lunch_start_time IS NOT NULL AND lunch_end_time IS NULL THEN $1
+             ELSE lunch_end_time
+           END,
+           total_worked_hours = $2, daily_earned = $3, status = 'Completed'
+       WHERE id = $4 AND end_work_time IS NULL RETURNING *`,
+      [endWork, workedHours, dailyEarned, log.id],
     );
 
     return res.json({
@@ -223,7 +299,8 @@ router.post("/end-work", async (req: Request, res: Response): Promise<any> => {
         earned_today: dailyEarned,
       },
       log: finalUpdate.rows[0],
-    });
+      },
+    );
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Server error ending work" });

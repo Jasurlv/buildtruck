@@ -8,7 +8,8 @@ const router = Router();
 router.get("/", async (req: Request, res: Response): Promise<any> => {
   try {
     const result = await pool.query(`
-      SELECT w.*, b.name AS building_name 
+      SELECT w.id, w.full_name, w.username, w.hourly_rate,
+             w.assigned_building_id, b.name AS building_name
       FROM workers w 
       LEFT JOIN buildings b ON w.assigned_building_id = b.id 
       ORDER BY w.id DESC
@@ -39,7 +40,9 @@ router.post("/", async (req: Request, res: Response): Promise<any> => {
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     const result = await pool.query(
-      `INSERT INTO workers (full_name, username, password, hourly_rate, assigned_building_id) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      `INSERT INTO workers (full_name, username, password, hourly_rate, assigned_building_id)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, full_name, username, hourly_rate, assigned_building_id`,
       [full_name, username, hashedPassword, hourly_rate, assigned_building_id],
     );
     return res.json(result.rows[0]);
@@ -75,10 +78,12 @@ router.put("/:id", async (req: Request, res: Response): Promise<any> => {
 
     if (password && password.trim() !== "") {
       const hashedPassword = await bcrypt.hash(password, 10);
-      query += `, password = $5 WHERE id = $6 RETURNING *`;
+      query += `, password = $5 WHERE id = $6
+                RETURNING id, full_name, username, hourly_rate, assigned_building_id`;
       params.push(hashedPassword, id);
     } else {
-      query += ` WHERE id = $5 RETURNING *`;
+      query += ` WHERE id = $5
+                RETURNING id, full_name, username, hourly_rate, assigned_building_id`;
       params.push(id);
     }
 
