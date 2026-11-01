@@ -34,7 +34,12 @@ export function getHost(): string | undefined {
 }
 
 // Number of reverse proxies in front of the API (1 behind nginx), used to read client IPs.
+// Required in production: if it is wrong behind nginx, every client appears as 127.0.0.1
+// and shares a single login rate-limit bucket.
 export function getTrustProxyHops(): number {
+  if (isProduction && !process.env.TRUST_PROXY) {
+    throw new Error("TRUST_PROXY must be set in production (1 behind nginx, 0 if exposed directly)");
+  }
   const hops = Number(process.env.TRUST_PROXY || 0);
   if (!Number.isInteger(hops) || hops < 0) {
     throw new Error("TRUST_PROXY must be a non-negative integer");

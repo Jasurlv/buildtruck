@@ -11,7 +11,8 @@ systemd, nginx, TLS, backups) is in [deploy/DEPLOY.md](deploy/DEPLOY.md). In sho
 2. Build the backend and apply the database migrations with `npm run build && npm run migrate`.
    Migrations live in `site-attendance-backend/migrations/`, are tracked in the
    `schema_migrations` table and each one runs once. In development, `npm run migrate:dev`
-   runs them without building.
+   runs them without building. `deploy/e2e-test.sh` runs the end-to-end API checks
+   (`site-attendance-backend/test/e2e.mjs`) on the server against a throwaway database.
 3. Provision the first administrator by setting `ADMIN_USERNAME` and a unique
    `ADMIN_PASSWORD` of at least 12 characters in the process environment, then running
    `npm run create-admin` (or `create-admin:dev`). Credentials are never embedded in the

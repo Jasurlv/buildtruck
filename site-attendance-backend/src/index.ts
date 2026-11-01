@@ -1,7 +1,7 @@
 import express, { type ErrorRequestHandler, type RequestHandler } from "express";
 import cors from "cors";
 import helmet from "helmet";
-import { rateLimit } from "express-rate-limit";
+import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import {
   getAppTimezone,
   getCorsOrigins,
@@ -33,19 +33,35 @@ app.use(helmet());
 app.use(cors(corsOrigins ? { origin: corsOrigins } : undefined));
 app.use(express.json({ limit: "100kb" }));
 
-// Only failed attempts count, so workers sharing a site network are not locked out.
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 10,
+// Login throttling counts failed attempts only. Workers often share one public IP
+// (site Wi-Fi, mobile carrier NAT), so the strict limit is per IP + username: one
+// person mistyping cannot lock out colleagues. A looser per-IP limit stops one
+// client from guessing passwords across many usernames.
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const loginLimitOptions = {
+  windowMs: LOGIN_WINDOW_MS,
   skipSuccessfulRequests: true,
   standardHeaders: "draft-8",
   legacyHeaders: false,
   message: { error: "Too many failed login attempts. Try again in 15 minutes." },
+} as const;
+const loginPerIpLimiter = rateLimit({ ...loginLimitOptions, limit: 100 });
+const loginPerAccountLimiter = rateLimit({
+  ...loginLimitOptions,
+  limit: 10,
+  keyGenerator: (req) => {
+    const username =
+      typeof req.body?.username === "string" ? req.body.username.trim().toLowerCase() : "";
+    return `${ipKeyGenerator(req.ip ?? "")}|${username}`;
+  },
 });
 
 // Routes
-app.use("/api/admin/login", loginLimiter);
-app.use("/api/worker-auth/login", loginLimiter);
+app.use(
+  ["/api/admin/login", "/api/worker-auth/login"],
+  loginPerIpLimiter,
+  loginPerAccountLimiter,
+);
 app.use("/api/admin", adminRoutes);
 app.use("/api/buildings", requireRole("admin"), buildingRoutes);
 app.use("/api/workers", requireRole("admin"), workerRoutes);

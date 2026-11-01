@@ -3,7 +3,7 @@
 # Runs as the postgres user from buildtruck-db-backup.service.
 set -euo pipefail
 
-DB_NAME="${DB_NAME:-buildtruck}"
+DB_NAME="${DB_NAME:-timetrack_db}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/buildtruck}"
 KEEP_DAYS="${KEEP_DAYS:-14}"
 

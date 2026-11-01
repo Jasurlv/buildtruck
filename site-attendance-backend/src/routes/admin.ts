@@ -22,6 +22,7 @@ router.post("/login", async (req: Request, res: Response): Promise<any> => {
     );
     const admin = result.rows[0];
     if (!admin || !(await bcrypt.compare(password, admin.password_hash))) {
+      console.warn(`Failed admin login for ${JSON.stringify(username)} from ${req.ip}`);
       return res.status(401).json({ error: "Invalid admin username or password" });
     }
 

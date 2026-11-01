@@ -26,6 +26,7 @@ router.post("/login", async (req: Request, res: Response): Promise<any> => {
     );
 
     if (result.rows.length === 0) {
+      console.warn(`Failed worker login for ${JSON.stringify(username)} from ${req.ip}`);
       return res.status(401).json({ error: "Invalid username or password" });
     }
 
@@ -33,6 +34,7 @@ router.post("/login", async (req: Request, res: Response): Promise<any> => {
     const isMatch = await bcrypt.compare(password, worker.password);
 
     if (!isMatch) {
+      console.warn(`Failed worker login for ${JSON.stringify(username)} from ${req.ip}`);
       return res.status(401).json({ error: "Invalid username or password" });
     }
 

@@ -5,9 +5,9 @@ Wants=network-online.target postgresql.service
 
 [Service]
 Type=simple
-User=buildtruck
-Group=buildtruck
-WorkingDirectory=/opt/buildtruck/app/site-attendance-backend
+User=deploy
+Group=deploy
+WorkingDirectory=/home/deploy/buildtruck/site-attendance-backend
 EnvironmentFile=/etc/buildtruck/api.env
 ExecStart=/usr/bin/node --enable-source-maps dist/index.js
 Restart=always
@@ -16,12 +16,13 @@ KillSignal=SIGTERM
 TimeoutStopSec=15
 
 # Hardening: the API only needs to read its code and open network sockets.
+# NoNewPrivileges also stops the process from using the deploy user's sudo rights.
 NoNewPrivileges=true
 CapabilityBoundingSet=
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
