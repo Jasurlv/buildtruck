@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import pool from "../db/pool.js";
+import { getAppTimezone } from "../config.js";
 
 const router = Router();
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -13,10 +14,10 @@ function isDate(value: unknown): value is string {
 }
 
 router.get("/", async (req: Request, res: Response): Promise<any> => {
-  const endDefault = new Date().toISOString().slice(0, 10);
-  const startDefault = new Date(Date.now() - 29 * DAY_MS)
-    .toISOString()
-    .slice(0, 10);
+  // en-CA formats as YYYY-MM-DD; dates follow the building sites' calendar.
+  const siteDate = new Intl.DateTimeFormat("en-CA", { timeZone: getAppTimezone() });
+  const endDefault = siteDate.format(new Date());
+  const startDefault = siteDate.format(new Date(Date.now() - 29 * DAY_MS));
   const startDate = req.query.start_date ?? startDefault;
   const endDate = req.query.end_date ?? endDefault;
 

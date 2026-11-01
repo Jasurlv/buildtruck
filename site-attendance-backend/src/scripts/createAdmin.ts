@@ -1,5 +1,4 @@
 import bcrypt from "bcrypt";
-import { readFile } from "node:fs/promises";
 import pool from "../db/pool.js";
 
 async function createAdmin(): Promise<void> {
@@ -11,12 +10,7 @@ async function createAdmin(): Promise<void> {
     );
   }
 
-  const migration = await readFile(
-    new URL("../db/migrations/001_create_admins.sql", import.meta.url),
-    "utf8",
-  );
-  await pool.query(migration);
-
+  // The admins table is created by `npm run migrate`.
   const passwordHash = await bcrypt.hash(password, 12);
   await pool.query(
     "INSERT INTO admins (username, password_hash) VALUES ($1, $2)",

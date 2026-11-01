@@ -1,7 +1,35 @@
 import { Router, Request, Response } from "express";
 import pool from "../db/pool.js";
+import { parseId, parseNumber, parseText } from "../validation.js";
 
 const router = Router();
+
+function parseBuilding(body: any) {
+  const name = parseText(body?.name, 255);
+  const address = parseText(body?.address, 2000);
+  const latitude = parseNumber(body?.latitude);
+  const longitude = parseNumber(body?.longitude);
+  const radius_meters =
+    body?.radius_meters === undefined || body?.radius_meters === null
+      ? 30
+      : parseNumber(body.radius_meters);
+  if (
+    !name ||
+    !address ||
+    !Number.isFinite(latitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    !Number.isFinite(longitude) ||
+    longitude < -180 ||
+    longitude > 180 ||
+    !Number.isInteger(radius_meters) ||
+    radius_meters < 1 ||
+    radius_meters > 5000
+  ) {
+    return null;
+  }
+  return { name, address, latitude, longitude, radius_meters };
+}
 
 // GET all buildings with total workers count
 router.get("/", async (req: Request, res: Response): Promise<any> => {
@@ -22,7 +50,13 @@ router.get("/", async (req: Request, res: Response): Promise<any> => {
 
 // POST create building with uniqueness check
 router.post("/", async (req: Request, res: Response): Promise<any> => {
-  const { name, address, latitude, longitude, radius_meters } = req.body;
+  const building = parseBuilding(req.body);
+  if (!building) {
+    return res.status(400).json({
+      error: "Name, address, valid coordinates and a radius of 1-5000 meters are required.",
+    });
+  }
+  const { name, address, latitude, longitude, radius_meters } = building;
   try {
     const existing = await pool.query(
       `SELECT id FROM buildings WHERE LOWER(name) = LOWER($1)`,
@@ -47,8 +81,17 @@ router.post("/", async (req: Request, res: Response): Promise<any> => {
 
 // PUT update building with uniqueness check
 router.put("/:id", async (req: Request, res: Response): Promise<any> => {
-  const { id } = req.params;
-  const { name, address, latitude, longitude, radius_meters } = req.body;
+  const id = parseId(req.params.id);
+  if (!id) {
+    return res.status(404).json({ error: "Building not found" });
+  }
+  const building = parseBuilding(req.body);
+  if (!building) {
+    return res.status(400).json({
+      error: "Name, address, valid coordinates and a radius of 1-5000 meters are required.",
+    });
+  }
+  const { name, address, latitude, longitude, radius_meters } = building;
   try {
     const existing = await pool.query(
       `SELECT id FROM buildings WHERE LOWER(name) = LOWER($1) AND id != $2`,
@@ -66,6 +109,9 @@ router.put("/:id", async (req: Request, res: Response): Promise<any> => {
       `UPDATE buildings SET name = $1, address = $2, latitude = $3, longitude = $4, radius_meters = $5 WHERE id = $6 RETURNING *`,
       [name, address, latitude, longitude, radius_meters, id],
     );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Building not found" });
+    }
     return res.json(result.rows[0]);
   } catch (err) {
     console.error(err);
@@ -75,9 +121,15 @@ router.put("/:id", async (req: Request, res: Response): Promise<any> => {
 
 // DELETE building
 router.delete("/:id", async (req: Request, res: Response): Promise<any> => {
-  const { id } = req.params;
+  const id = parseId(req.params.id);
+  if (!id) {
+    return res.status(404).json({ error: "Building not found" });
+  }
   try {
-    await pool.query(`DELETE FROM buildings WHERE id = $1`, [id]);
+    const result = await pool.query(`DELETE FROM buildings WHERE id = $1`, [id]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "Building not found" });
+    }
     return res.json({ success: true });
   } catch (err) {
     console.error(err);

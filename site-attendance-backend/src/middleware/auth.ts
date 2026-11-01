@@ -25,7 +25,7 @@ export function requireRole(role: AuthClaims["role"]): RequestHandler {
     }
 
     try {
-      const claims = jwt.verify(token, getJwtSecret());
+      const claims = jwt.verify(token, getJwtSecret(), { algorithms: ["HS256"] });
       if (
         typeof claims === "string" ||
         claims.role !== role ||

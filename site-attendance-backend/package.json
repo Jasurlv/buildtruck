@@ -2,19 +2,35 @@
   "name": "site-attendance-backend",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "private": true,
+  "main": "dist/index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon --exec tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "start": "node dist/index.js",
-    "create-admin": "tsx src/scripts/createAdmin.ts"
+    "start": "node --enable-source-maps dist/index.js",
+    "migrate": "node dist/scripts/migrate.js",
+    "migrate:dev": "tsx src/scripts/migrate.ts",
+    "create-admin": "node dist/scripts/createAdmin.js",
+    "create-admin:dev": "tsx src/scripts/createAdmin.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "module",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "express-rate-limit": "8.7.1",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.23.1"
+  },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
     "@types/cors": "^2.8.19",
@@ -23,16 +39,7 @@
     "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
     "nodemon": "^3.1.14",
-    "ts-node": "^10.9.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
-  },
-  "dependencies": {
-    "bcrypt": "^6.0.0",
-    "cors": "^2.8.6",
-    "dotenv": "^18.0.9",
-    "express": "^5.3.0",
-    "jsonwebtoken": "^9.0.3",
-    "pg": "^8.23.1"
   }
 }

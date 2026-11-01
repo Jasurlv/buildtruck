@@ -1,0 +1,4 @@
+# Server-side files must keep LF endings even when committed from Windows.
+*.sh       text eol=lf
+*.sql      text eol=lf
+deploy/**  text eol=lf

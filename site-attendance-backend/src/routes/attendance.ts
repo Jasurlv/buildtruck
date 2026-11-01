@@ -1,6 +1,8 @@
 import { Router, Request, Response } from "express";
 import pool from "../db/pool.js";
+import { getAppTimezone } from "../config.js";
 import { getAuthenticatedWorkerId, requireRole } from "../middleware/auth.js";
+import { PG_UNIQUE_VIOLATION, pgErrorCode } from "../validation.js";
 
 const router = Router();
 
@@ -89,7 +91,6 @@ router.post(
     ) {
       return res.status(400).json({ error: "Valid location coordinates are required" });
     }
-    const today = new Date().toISOString().split("T")[0];
 
     // Get worker and their assigned building info
     const workerRes = await pool.query(
@@ -136,17 +137,21 @@ router.post(
       return res.status(400).json({ error: "A shift is already active" });
     }
 
-    // Insert attendance log
+    // Insert attendance log; work_date is the calendar day at the building sites.
     const newLog = await pool.query(
       `INSERT INTO attendance_logs (worker_id, building_id, work_date, punch_in_time, status)
-       VALUES ($1, $2, $3, NOW(), 'Present') RETURNING *`,
-      [workerId, worker.building_id, today],
+       VALUES ($1, $2, (NOW() AT TIME ZONE $3)::date, NOW(), 'Present') RETURNING *`,
+      [workerId, worker.building_id, getAppTimezone()],
     );
 
     return res
       .status(201)
       .json({ message: "Punched in successfully!", log: newLog.rows[0] });
   } catch (err) {
+    // A concurrent punch-in for the same worker hit the one-active-shift index.
+    if (pgErrorCode(err) === PG_UNIQUE_VIOLATION) {
+      return res.status(400).json({ error: "A shift is already active" });
+    }
     console.error(err);
     return res.status(500).json({ error: "Server error during punch in" });
   }
