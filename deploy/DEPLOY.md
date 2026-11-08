@@ -119,7 +119,7 @@ unset ADMIN_USERNAME ADMIN_PASSWORD
 
 ## 7. Optional but recommended: end-to-end test on this server
 
-This runs the full API test suite (40 checks) with the server's own Node 22 and
+This runs the full API test suite (74 checks) with the server's own Node 22 and
 PostgreSQL 16. It uses a throwaway database `timetrack_e2e` and port 5055, then deletes the
 database. Production data is not touched.
 
