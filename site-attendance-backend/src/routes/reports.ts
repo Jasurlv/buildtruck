@@ -77,7 +77,13 @@ const FROM_REPORT = `
 const ROW_COLUMNS = `
   a.id, w.full_name, w.username, b.name AS building_name, a.work_date,
   a.punch_in_time, a.lunch_start_time, a.lunch_end_time, a.end_work_time,
-  a.total_worked_hours, a.daily_earned`;
+  a.total_worked_hours, a.daily_earned,
+  a.punch_in_time AS arrival_at, a.paid_start_at, a.scheduled_start_at,
+  ROUND(EXTRACT(EPOCH FROM (a.paid_start_at - a.punch_in_time)) / 60)::int AS waiting_minutes,
+  CASE WHEN a.scheduled_start_at IS NOT NULL
+    THEN GREATEST(0, ROUND(EXTRACT(EPOCH FROM (a.paid_start_at - a.scheduled_start_at)) / 60))::int
+  END AS lateness_minutes,
+  a.lunch_minutes, a.lunch_deducted_minutes`;
 
 // Stable across pages: ids break ties within a day.
 const ORDER_BY = "ORDER BY a.work_date DESC, a.id DESC";

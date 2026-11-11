@@ -9,6 +9,7 @@ import {
   getJwtSecret,
   getPort,
   getTrustProxyHops,
+  getWorkRules,
 } from "./config.js";
 import pool from "./db/pool.js";
 import buildingRoutes from "./routes/buildings.js";
@@ -17,11 +18,13 @@ import attendanceRoutes from "./routes/attendance.js";
 import adminRoutes from "./routes/admin.js";
 import workerAuthRoutes from "./routes/workerAuth.js";
 import reportRoutes from "./routes/reports.js";
+import shiftRoutes from "./routes/shifts.js";
 import { requireRole } from "./middleware/auth.js";
 
 // Fail fast on missing or invalid configuration instead of on the first request.
 getJwtSecret();
 getAppTimezone();
+getWorkRules();
 const PORT = getPort();
 const HOST = getHost();
 const corsOrigins = getCorsOrigins();
@@ -30,7 +33,9 @@ const app = express();
 app.set("trust proxy", getTrustProxyHops());
 
 app.use(helmet());
-app.use(cors(corsOrigins ? { origin: corsOrigins } : undefined));
+// Browsers hide the Date header cross-origin unless it is exposed; the admin
+// dashboard reads it to use the server's clock instead of the computer's.
+app.use(cors({ ...(corsOrigins ? { origin: corsOrigins } : {}), exposedHeaders: ["Date"] }));
 app.use(express.json({ limit: "100kb" }));
 
 // Login throttling counts failed attempts only. Workers often share one public IP
@@ -68,6 +73,7 @@ app.use("/api/workers", requireRole("admin"), workerRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/worker-auth", workerAuthRoutes);
 app.use("/api/reports", requireRole("admin"), reportRoutes);
+app.use("/api/shifts", requireRole("admin"), shiftRoutes);
 
 const healthCheck: RequestHandler = async (req, res) => {
   try {

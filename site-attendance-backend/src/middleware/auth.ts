@@ -5,6 +5,8 @@ import { getJwtSecret } from "../config.js";
 export type AuthClaims = JwtPayload & {
   role: "admin" | "worker";
   workerId?: number;
+  adminId?: number;
+  username?: string;
 };
 
 declare global {

@@ -9,6 +9,7 @@ ENV_FILE="${ENV_FILE:-/etc/buildtruck/api.env}"
 DB_ROLE="${DB_ROLE:-timetrack}"
 TEST_DB=timetrack_e2e
 TEST_PORT=5055
+CLOCK_PORT=5056
 
 prod_url=$(grep '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)
 export DATABASE_URL="${prod_url%/*}/$TEST_DB"
@@ -16,7 +17,7 @@ export NODE_ENV=production HOST=127.0.0.1 PORT=$TEST_PORT TRUST_PROXY=1
 export CORS_ORIGINS=https://e2e.invalid E2E_ALLOWED_ORIGIN=https://e2e.invalid
 export JWT_SECRET; JWT_SECRET=$(openssl rand -base64 48)
 export ADMIN_USERNAME=e2e-admin ADMIN_PASSWORD; ADMIN_PASSWORD=$(openssl rand -hex 16)
-export API_URL="http://127.0.0.1:$TEST_PORT/api" E2E_ALLOW_WRITES=1
+export API_URL="http://127.0.0.1:$TEST_PORT/api" E2E_ALLOW_WRITES=1 E2E_CLOCK_PORT=$CLOCK_PORT
 
 server_log=$(mktemp)
 server_pid=""
@@ -34,7 +35,8 @@ sudo -u postgres createdb -O "$DB_ROLE" "$TEST_DB"
 cd "$APP_DIR/site-attendance-backend"
 node dist/scripts/migrate.js
 node dist/scripts/createAdmin.js
-node dist/index.js >"$server_log" 2>&1 &
+# The preload lets the tests set this throwaway instance's clock; production never loads it.
+node --import ./test/fakeClock.mjs dist/index.js >"$server_log" 2>&1 &
 server_pid=$!
 for _ in $(seq 1 20); do
   curl -fsS "$API_URL/health" >/dev/null 2>&1 && break

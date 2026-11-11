@@ -72,3 +72,57 @@ export function getAppTimezone(): string {
   }
   return timezone;
 }
+
+export type WorkRules = {
+  changingAllowanceMinutes: number;
+  /** "HH:MM" in APP_TIMEZONE. */
+  lunchOpensAt: string;
+  /** "HH:MM" in APP_TIMEZONE; this whole minute still counts. */
+  lunchLatestStart: string;
+  lunchMinMinutes: number;
+  lunchMaxMinutes: number;
+  lunchDefaultDeductionMinutes: number;
+  lunchAutoDeductMinShiftHours: number;
+};
+
+function numberEnv(name: string, fallback: number, integer = true): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0 || (integer && !Number.isInteger(value))) {
+    throw new Error(`${name} must be a non-negative ${integer ? "whole " : ""}number`);
+  }
+  return value;
+}
+
+function clockEnv(name: string, fallback: string): string {
+  const value = process.env[name]?.trim() || fallback;
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
+    throw new Error(`${name} must be a 24-hour HH:MM time`);
+  }
+  return value;
+}
+
+let workRules: WorkRules | undefined;
+
+// Attendance and pay rules. Times are interpreted in APP_TIMEZONE.
+export function getWorkRules(): WorkRules {
+  if (workRules) return workRules;
+  const rules: WorkRules = {
+    changingAllowanceMinutes: numberEnv("CHANGING_ALLOWANCE_MINUTES", 15),
+    lunchOpensAt: clockEnv("LUNCH_OPENS_AT", "12:00"),
+    lunchLatestStart: clockEnv("LUNCH_LATEST_START", "12:30"),
+    lunchMinMinutes: numberEnv("LUNCH_MIN_MINUTES", 40),
+    lunchMaxMinutes: numberEnv("LUNCH_MAX_MINUTES", 60),
+    lunchDefaultDeductionMinutes: numberEnv("LUNCH_DEFAULT_DEDUCTION_MINUTES", 60),
+    lunchAutoDeductMinShiftHours: numberEnv("LUNCH_AUTO_DEDUCT_MIN_SHIFT_HOURS", 5, false),
+  };
+  if (rules.lunchOpensAt > rules.lunchLatestStart) {
+    throw new Error("LUNCH_OPENS_AT must not be later than LUNCH_LATEST_START");
+  }
+  if (rules.lunchMinMinutes > rules.lunchMaxMinutes) {
+    throw new Error("LUNCH_MIN_MINUTES must not be greater than LUNCH_MAX_MINUTES");
+  }
+  workRules = rules;
+  return rules;
+}

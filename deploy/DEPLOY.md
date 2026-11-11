@@ -100,7 +100,7 @@ node --env-file=/etc/buildtruck/api.env dist/scripts/migrate.js
 ```
 
 Expected output: `Applied 001_create_admins.sql`, `002_core_tables.sql`,
-`003_production_hardening.sql`, then `Database schema is up to date.` Running it again only
+`003_production_hardening.sql`, `004_pay_attendance_rules.sql`, then `Database schema is up to date.` Running it again only
 prints the last line.
 
 ## 6. Create the first admin
@@ -119,7 +119,7 @@ unset ADMIN_USERNAME ADMIN_PASSWORD
 
 ## 7. Optional but recommended: end-to-end test on this server
 
-This runs the full API test suite (74 checks) with the server's own Node 22 and
+This runs the full API test suite (150 checks) with the server's own Node 22 and
 PostgreSQL 16. It uses a throwaway database `timetrack_e2e` and port 5055, then deletes the
 database. Production data is not touched.
 
@@ -280,3 +280,8 @@ custom-format dumps, so use a plain SQL dump:
 | `HOST` / `PORT` | | Bind address and port (default: all interfaces, port 5000) |
 | `APP_TIMEZONE` | | Sites' timezone for shift dates (default `Europe/Riga`) |
 | `DB_POOL_MAX` | | Max PostgreSQL connections (default 10) |
+| `CHANGING_ALLOWANCE_MINUTES` | | Minutes to change clothes before paid time starts (default 15) |
+| `LUNCH_OPENS_AT` / `LUNCH_LATEST_START` | | Lunch can start in this window, `HH:MM` in `APP_TIMEZONE` (default `12:00` / `12:30`) |
+| `LUNCH_MIN_MINUTES` / `LUNCH_MAX_MINUTES` | | Lunch lengths a worker can choose (default 40 / 60) |
+| `LUNCH_DEFAULT_DEDUCTION_MINUTES` | | Deducted when no lunch was recorded (default 60) |
+| `LUNCH_AUTO_DEDUCT_MIN_SHIFT_HOURS` | | That deduction applies to shifts longer than this (default 5) |

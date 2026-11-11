@@ -15,6 +15,13 @@ const router = Router();
 // bcrypt only uses the first 72 bytes of a password.
 const MAX_PASSWORD_BYTES = 72;
 
+const WORKER_COLUMNS = `id, full_name, username, hourly_rate, assigned_building_id,
+  to_char(work_start_time, 'HH24:MI') AS work_start_time`;
+
+function isClockTime(value: unknown): boolean {
+  return typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+}
+
 function parseWorker(body: any) {
   const full_name = parseText(body?.full_name, 255);
   const username = parseText(body?.username, 100);
@@ -28,6 +35,9 @@ function parseWorker(body: any) {
     body?.assigned_building_id !== "";
   const assigned_building_id = hasBuilding ? parseId(body.assigned_building_id) : null;
   const password = typeof body?.password === "string" ? body.password : "";
+  // Not sent: a new worker gets the default and an existing one keeps theirs.
+  const hasStartTime = body?.work_start_time !== undefined && body?.work_start_time !== null;
+  const work_start_time: string | null = hasStartTime ? body.work_start_time : null;
   if (
     !full_name ||
     !username ||
@@ -35,15 +45,16 @@ function parseWorker(body: any) {
     hourly_rate < 0 ||
     hourly_rate > 10000 ||
     (hasBuilding && !assigned_building_id) ||
+    (hasStartTime && !isClockTime(work_start_time)) ||
     Buffer.byteLength(password) > MAX_PASSWORD_BYTES
   ) {
     return null;
   }
-  return { full_name, username, password, hourly_rate, assigned_building_id };
+  return { full_name, username, password, hourly_rate, assigned_building_id, work_start_time };
 }
 
 const INVALID_WORKER_ERROR =
-  "Full name, username and a valid hourly rate are required (password at most 72 characters).";
+  "Full name, username, a valid hourly rate and a start time (HH:MM) are required (password at most 72 characters).";
 
 function handleWriteError(err: unknown, res: Response, fallback: string) {
   const code = pgErrorCode(err);
@@ -64,7 +75,8 @@ router.get("/", async (req: Request, res: Response): Promise<any> => {
   try {
     const result = await pool.query(`
       SELECT w.id, w.full_name, w.username, w.hourly_rate,
-             w.assigned_building_id, b.name AS building_name
+             w.assigned_building_id, b.name AS building_name,
+             to_char(w.work_start_time, 'HH24:MI') AS work_start_time
       FROM workers w
       LEFT JOIN buildings b ON w.assigned_building_id = b.id
       ORDER BY w.id DESC
@@ -85,7 +97,7 @@ router.post("/", async (req: Request, res: Response): Promise<any> => {
   if (!worker.password) {
     return res.status(400).json({ error: "A password is required for new workers." });
   }
-  const { full_name, username, password, hourly_rate, assigned_building_id } = worker;
+  const { full_name, username, password, hourly_rate, assigned_building_id, work_start_time } = worker;
   try {
     const existing = await pool.query(
       `SELECT id FROM workers WHERE LOWER(username) = LOWER($1)`,
@@ -101,10 +113,10 @@ router.post("/", async (req: Request, res: Response): Promise<any> => {
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     const result = await pool.query(
-      `INSERT INTO workers (full_name, username, password, hourly_rate, assigned_building_id)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, full_name, username, hourly_rate, assigned_building_id`,
-      [full_name, username, hashedPassword, hourly_rate, assigned_building_id],
+      `INSERT INTO workers (full_name, username, password, hourly_rate, assigned_building_id, work_start_time)
+       VALUES ($1, $2, $3, $4, $5, COALESCE($6::time, '08:00'))
+       RETURNING ${WORKER_COLUMNS}`,
+      [full_name, username, hashedPassword, hourly_rate, assigned_building_id, work_start_time],
     );
     return res.json(result.rows[0]);
   } catch (err) {
@@ -122,7 +134,7 @@ router.put("/:id", async (req: Request, res: Response): Promise<any> => {
   if (!worker) {
     return res.status(400).json({ error: INVALID_WORKER_ERROR });
   }
-  const { full_name, username, password, hourly_rate, assigned_building_id } = worker;
+  const { full_name, username, password, hourly_rate, assigned_building_id, work_start_time } = worker;
   try {
     const existing = await pool.query(
       `SELECT id FROM workers WHERE LOWER(username) = LOWER($1) AND id != $2`,
@@ -134,22 +146,22 @@ router.put("/:id", async (req: Request, res: Response): Promise<any> => {
         .json({ error: "This username is already taken by another worker." });
     }
 
-    let query = `UPDATE workers SET full_name = $1, username = $2, hourly_rate = $3, assigned_building_id = $4`;
+    let query = `UPDATE workers SET full_name = $1, username = $2, hourly_rate = $3, assigned_building_id = $4,
+                 work_start_time = COALESCE($5::time, work_start_time)`;
     let params: any[] = [
       full_name,
       username,
       hourly_rate,
       assigned_building_id,
+      work_start_time,
     ];
 
     if (password.trim() !== "") {
       const hashedPassword = await bcrypt.hash(password, 10);
-      query += `, password = $5 WHERE id = $6
-                RETURNING id, full_name, username, hourly_rate, assigned_building_id`;
+      query += `, password = $6 WHERE id = $7 RETURNING ${WORKER_COLUMNS}`;
       params.push(hashedPassword, id);
     } else {
-      query += ` WHERE id = $5
-                RETURNING id, full_name, username, hourly_rate, assigned_building_id`;
+      query += ` WHERE id = $6 RETURNING ${WORKER_COLUMNS}`;
       params.push(id);
     }
 

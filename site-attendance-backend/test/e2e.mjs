@@ -3,7 +3,9 @@
 //
 // Env: API_URL, ADMIN_USERNAME, ADMIN_PASSWORD, E2E_ALLOWED_ORIGIN (a CORS_ORIGINS entry),
 //      E2E_ALLOW_WRITES=1, DATABASE_URL (the same throwaway database the API uses;
-//      report fixtures are inserted directly). The proxy checks assume TRUST_PROXY=1.
+//      report fixtures are inserted directly), E2E_CLOCK_PORT (the API must be started
+//      with --import ./test/fakeClock.mjs and the same port).
+//      The proxy checks assume TRUST_PROXY=1.
 
 import pg from "pg";
 
@@ -15,6 +17,11 @@ const API = process.env.API_URL ?? "http://127.0.0.1:5055/api";
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const ALLOWED_ORIGIN = process.env.E2E_ALLOWED_ORIGIN;
+const CLOCK_URL = `http://127.0.0.1:${process.env.E2E_CLOCK_PORT}`;
+if (!process.env.E2E_CLOCK_PORT) {
+  console.error("Refusing to run: start the API with --import ./test/fakeClock.mjs and set E2E_CLOCK_PORT.");
+  process.exit(2);
+}
 const run = Date.now().toString(36);
 
 let failures = 0;
@@ -87,8 +94,6 @@ const active = await call("GET", "/attendance/active", { token: worker });
 check("active shift", active.data?.activeShift?.id === pin.data.log.id);
 const drift = Math.abs(new Date(active.data.activeShift.punch_in_time).getTime() - Date.now());
 check("punch_in_time is correct instant", drift < 60_000, `drift ${drift}ms`);
-check("lunch start", (await call("POST", "/attendance/lunch-start", { token: worker })).status === 200);
-check("lunch end", (await call("POST", "/attendance/lunch-end", { token: worker })).status === 200);
 const end = await call("POST", "/attendance/end-work", { token: worker });
 check("end work", end.status === 200, JSON.stringify(end.data?.summary));
 check("history", (await call("GET", "/attendance/history", { token: worker })).data?.shifts?.length === 1);
@@ -200,6 +205,208 @@ check("export totals match paged totals", sameTotals(exp.data?.totals));
 check("export validates params", (await exportReport({ search: "x".repeat(101) })).status === 400);
 check("export requires admin", (await exportReport({ search: run }, null)).status === 401 && (await exportReport({ search: run }, worker)).status === 403);
 
+console.log("== Pay and attendance rules (frozen server clock)");
+// Tokens are issued before the clock is set back, so they stay valid after it is released.
+const setClock = async (iso) => {
+  const res = await fetch(`${CLOCK_URL}/set`, { method: "POST", body: iso });
+  if (res.status !== 204) throw new Error(`clock set failed for ${iso}`);
+};
+const releaseClock = () => fetch(`${CLOCK_URL}/release`, { method: "POST" });
+
+// Riga is UTC+3 on these June dates. Each scenario uses its own day.
+const riga = (day, time) => `2025-06-${day}T${time.length === 5 ? `${time}:00` : time}+03:00`;
+const sameInstant = (a, b) => new Date(a).getTime() === new Date(b).getTime();
+
+const payW = await call("POST", "/workers", { token: admin, body: { full_name: "Pay Rules", username: `pay-${run}`, password: "pw1234", hourly_rate: 10, assigned_building_id: bid } });
+check("new worker defaults to work_start_time 08:00", payW.data?.work_start_time === "08:00", JSON.stringify(payW.data?.work_start_time));
+const payId = payW.data.id;
+const payBody = (extra) => ({ full_name: "Pay Rules", username: `pay-${run}`, password: "", hourly_rate: 10, assigned_building_id: bid, ...extra });
+const badTimes = await Promise.all(["25:00", "8:00", "08:60", "08:00:00", "", "abc"].map((work_start_time) =>
+  call("PUT", `/workers/${payId}`, { token: admin, body: payBody({ work_start_time }) })));
+check("invalid work_start_time -> 400", badTimes.every((r) => r.status === 400), badTimes.map((r) => r.status).join(","));
+const setStart = await call("PUT", `/workers/${payId}`, { token: admin, body: payBody({ work_start_time: "09:30" }) });
+check("work_start_time can be edited", setStart.status === 200 && setStart.data.work_start_time === "09:30");
+const keptStart = await call("PUT", `/workers/${payId}`, { token: admin, body: payBody({}) });
+check("PUT without work_start_time keeps it", keptStart.data?.work_start_time === "09:30");
+const workerList = await call("GET", "/workers", { token: admin });
+check("workers list includes work_start_time", workerList.data?.find((x) => x.id === payId)?.work_start_time === "09:30");
+await call("PUT", `/workers/${payId}`, { token: admin, body: payBody({ work_start_time: "08:00" }) });
+
+const payToken = (await call("POST", "/worker-auth/login", { body: { username: `pay-${run}`, password: "pw1234" } })).data.token;
+const punchAt = async (iso) => {
+  await setClock(iso);
+  return call("POST", "/attendance/punch-in", { token: payToken, body: onSite });
+};
+const lunchAt = async (iso, minutes) => {
+  await setClock(iso);
+  return call("POST", "/attendance/lunch", { token: payToken, body: { minutes } });
+};
+const finishAt = async (iso) => {
+  await setClock(iso);
+  return call("POST", "/attendance/end-work", { token: payToken });
+};
+const hasCode = (r, status, code) => r.status === status && r.data?.code === code && typeof r.data?.error === "string";
+
+for (const [day, arrive, paid, late, waiting] of [
+  ["02", "07:30", "08:00", 0, 30],
+  ["03", "07:45", "08:00", 0, 15],
+  ["04", "07:50", "08:05", 5, 15],
+  ["05", "08:00", "08:15", 15, 15],
+  ["06", "08:10", "08:25", 25, 15],
+]) {
+  const r = await punchAt(riga(day, arrive));
+  const log = r.data?.log;
+  check(`arrive ${arrive} -> paid ${paid}, late ${late}`,
+    r.status === 201 && sameInstant(log.paid_start_at, riga(day, paid)) && log.lateness_minutes === late && log.waiting_minutes === waiting,
+    `${log?.local_times?.paid_start} late=${log?.lateness_minutes} waiting=${log?.waiting_minutes}`);
+  check(`  status fields at ${arrive}`,
+    sameInstant(log.arrival_at, riga(day, arrive)) && sameInstant(log.scheduled_start_at, riga(day, "08:00")) &&
+    sameInstant(r.data.server_now, riga(day, arrive)) && log.work_date === `2025-06-${day}` && log.local_times.paid_start === paid);
+  await finishAt(riga(day, "16:00"));
+}
+
+// Winter time: 08:00 Riga is 06:00 UTC, an hour different from the June shifts.
+const winter = await punchAt("2025-01-15T07:30:00+02:00");
+check("scheduled start follows winter time", sameInstant(winter.data?.log?.scheduled_start_at, "2025-01-15T06:00:00Z"));
+await finishAt("2025-01-15T16:00:00+02:00");
+
+// The schedule is copied at punch-in: a later change must not alter a running shift.
+await call("PUT", `/workers/${payId}`, { token: admin, body: payBody({ work_start_time: "09:30" }) });
+const custom = await punchAt(riga("07", "09:20"));
+check("per-worker start time applies (09:30, arrive 09:20 -> 09:35, late 5)", sameInstant(custom.data?.log?.paid_start_at, riga("07", "09:35")) && custom.data.log.lateness_minutes === 5);
+await call("PUT", `/workers/${payId}`, { token: admin, body: payBody({ work_start_time: "08:00" }) });
+const stillCustom = await call("GET", "/attendance/active", { token: payToken });
+check("editing the worker doesn't change a running shift", sameInstant(stillCustom.data?.activeShift?.scheduled_start_at, riga("07", "09:30")));
+check("active: includes schedule and rules", stillCustom.data?.schedule?.work_start === "08:00" && stillCustom.data?.schedule?.arrive_by === "07:45" && stillCustom.data?.rules?.lunch_min_minutes === 40 && stillCustom.data?.rules?.lunch_max_minutes === 60);
+await finishAt(riga("07", "16:00"));
+
+console.log("-- lunch rules");
+check("lunch with no active shift -> 404 NO_ACTIVE_SHIFT", hasCode(await lunchAt(riga("09", "12:05"), 50), 404, "NO_ACTIVE_SHIFT"));
+check("end-work with no active shift -> 404 NO_ACTIVE_SHIFT", hasCode(await finishAt(riga("09", "12:06")), 404, "NO_ACTIVE_SHIFT"));
+
+// Mon 9 Jun: arrive 07:50, paid from 08:05.
+await punchAt(riga("09", "07:50"));
+for (const minutes of [39, 61, "50", 45.5, null, undefined]) {
+  check(`lunch minutes ${JSON.stringify(minutes)} -> 400 INVALID_LUNCH_MINUTES`, hasCode(await lunchAt(riga("09", "12:05"), minutes), 400, "INVALID_LUNCH_MINUTES"));
+}
+check("lunch at 11:59:59 -> LUNCH_WINDOW_NOT_OPEN", hasCode(await lunchAt(riga("09", "11:59:59"), 45), 409, "LUNCH_WINDOW_NOT_OPEN"));
+const noBody = await call("POST", "/attendance/lunch", { token: payToken });
+check("lunch without a body -> 400", hasCode(noBody, 400, "INVALID_LUNCH_MINUTES"));
+const lunchOk = await lunchAt(riga("09", "12:00"), 45);
+check("lunch at 12:00 for 45 min accepted", lunchOk.status === 200 && lunchOk.data.log.lunch_minutes === 45, JSON.stringify(lunchOk.data?.code ?? ""));
+check("lunch fields stored", sameInstant(lunchOk.data?.log?.lunch_started_at, riga("09", "12:00")) && sameInstant(lunchOk.data?.log?.lunch_planned_end_at, riga("09", "12:45")) && sameInstant(lunchOk.data?.server_now, riga("09", "12:00")));
+check("double lunch -> LUNCH_ALREADY_TAKEN", hasCode(await lunchAt(riga("09", "12:10"), 45), 409, "LUNCH_ALREADY_TAKEN"));
+check("second lunch after the first ended -> LUNCH_ALREADY_TAKEN", hasCode(await lunchAt(riga("09", "12:30"), 40), 409, "LUNCH_ALREADY_TAKEN"));
+check("end-lunch action removed", (await call("POST", "/attendance/lunch-end", { token: payToken })).status === 404);
+check("old lunch-start action removed", (await call("POST", "/attendance/lunch-start", { token: payToken })).status === 404);
+const midLunch = await call("GET", "/attendance/active", { token: payToken });
+check("active shift shows the running lunch and server_now", midLunch.data?.activeShift?.lunch_minutes === 45 && midLunch.data?.activeShift?.local_times?.lunch_planned_end === "12:45" && sameInstant(midLunch.data?.server_now, riga("09", "12:30")));
+let done = await finishAt(riga("09", "17:00"));
+check("recorded lunch deducted (08:05-17:00 less 45 = 8.17 h)", done.data?.summary?.worked_hours === 8.17 && done.data.summary.earned_today === 81.7 && done.data.summary.lunch_deducted_minutes === 45 && done.data.summary.lunch_deduction_type === "recorded", JSON.stringify(done.data?.summary));
+check("finish summary includes arrival and paid start", sameInstant(done.data?.summary?.arrival_at, riga("09", "07:50")) && sameInstant(done.data?.summary?.paid_start_at, riga("09", "08:05")));
+const recordedShiftId = done.data.log.id;
+
+// Boundaries of the window.
+await punchAt(riga("10", "07:30"));
+check("lunch at 12:31:00 -> LUNCH_WINDOW_CLOSED", hasCode(await lunchAt(riga("10", "12:31:00"), 60), 409, "LUNCH_WINDOW_CLOSED"));
+check("the rejected lunch left nothing behind", (await call("GET", "/attendance/active", { token: payToken })).data?.activeShift?.lunch_started_at === null);
+check("lunch at 12:30:59 accepted (the 12:30 minute counts)", (await lunchAt(riga("10", "12:30:59"), 60)).status === 200);
+await finishAt(riga("10", "17:00"));
+await punchAt(riga("11", "07:30"));
+check("lunch at 12:30:00 accepted", (await lunchAt(riga("11", "12:30"), 40)).status === 200);
+await finishAt(riga("11", "17:00"));
+
+// Paid time has not started yet at 12:05 for someone who arrived at 11:55.
+await punchAt(riga("12", "11:55"));
+check("lunch before paid start -> LUNCH_BEFORE_PAID_START", hasCode(await lunchAt(riga("12", "12:05"), 50), 409, "LUNCH_BEFORE_PAID_START"));
+check("lunch exactly at paid start accepted", (await lunchAt(riga("12", "12:10"), 50)).status === 200);
+await finishAt(riga("12", "17:00"));
+
+console.log("-- deductions");
+await punchAt(riga("13", "07:45"));
+await lunchAt(riga("13", "12:00"), 60);
+done = await finishAt(riga("13", "12:20"));
+check("finish during lunch deducts elapsed only (08:00-12:20 less 20 = 4.00 h)", done.data?.summary?.worked_hours === 4 && done.data.summary.lunch_deducted_minutes === 20 && done.data.summary.lunch_deduction_type === "elapsed", JSON.stringify(done.data?.summary));
+check("finish during lunch: lunch_end is the finish", sameInstant(done.data?.log?.lunch_end_time, riga("13", "12:20")));
+const elapsedShiftId = done.data.log.id;
+
+await punchAt(riga("16", "07:45"));
+done = await finishAt(riga("16", "13:00:01"));
+check("no lunch, just over 5 h -> 60 deducted", done.data?.summary?.lunch_deducted_minutes === 60 && done.data.summary.lunch_deduction_type === "default" && done.data.summary.worked_hours === 4, JSON.stringify(done.data?.summary));
+await punchAt(riga("17", "07:45"));
+done = await finishAt(riga("17", "13:00"));
+check("no lunch, exactly 5 h -> no deduction", done.data?.summary?.lunch_deducted_minutes === 0 && done.data.summary.lunch_deduction_type === "none" && done.data.summary.worked_hours === 5, JSON.stringify(done.data?.summary));
+await punchAt(riga("18", "07:45"));
+done = await finishAt(riga("18", "12:00"));
+check("no lunch, under 5 h -> no deduction", done.data?.summary?.lunch_deducted_minutes === 0 && done.data.summary.worked_hours === 4);
+await punchAt(riga("19", "07:30"));
+done = await finishAt(riga("19", "07:40"));
+check("finish before paid start -> 0 hours, 0 pay", done.status === 200 && done.data.summary.worked_hours === 0 && done.data.summary.earned_today === 0 && done.data.summary.lunch_deducted_minutes === 0);
+await punchAt(riga("20", "07:45"));
+await setClock(riga("20", "08:00"));
+const raceFinish = await Promise.all([call("POST", "/attendance/end-work", { token: payToken }), call("POST", "/attendance/end-work", { token: payToken })]);
+check("concurrent finish: exactly one succeeds", raceFinish.map((r) => r.status).sort().join(",") === "200,404", raceFinish.map((r) => r.status).join(","));
+
+console.log("-- admin correction");
+const patchShift = (id, body, token = admin) => call("PATCH", `/shifts/${id}`, { token, body });
+const auditOf = async (id) => (await call("GET", `/shifts/${id}/adjustments`, { token: admin })).data?.adjustments;
+await setClock(riga("30", "20:00"));
+const correctReason = "Forgot to tap on arrival";
+check("correction requires admin", (await call("PATCH", `/shifts/${recordedShiftId}`, { body: { reason: "x", lunch_minutes: 50 } })).status === 401 && (await patchShift(recordedShiftId, { reason: "x", lunch_minutes: 50 }, payToken)).status === 403);
+check("correction without reason -> REASON_REQUIRED", hasCode(await patchShift(recordedShiftId, { lunch_minutes: 50 }), 400, "REASON_REQUIRED") && hasCode(await patchShift(recordedShiftId, { reason: "   ", lunch_minutes: 50 }), 400, "REASON_REQUIRED"));
+check("correction with no fields -> NO_FIELDS", hasCode(await patchShift(recordedShiftId, { reason: "x" }), 400, "NO_FIELDS"));
+check("unknown shift -> SHIFT_NOT_FOUND", hasCode(await patchShift(2147483647, { reason: "x", lunch_minutes: 50 }), 404, "SHIFT_NOT_FOUND") && hasCode(await patchShift("abc", { reason: "x", lunch_minutes: 50 }), 404, "SHIFT_NOT_FOUND"));
+check("timestamp without timezone -> INVALID_TIMESTAMP", hasCode(await patchShift(recordedShiftId, { reason: "x", finish_at: "2025-06-09T17:00:00" }), 400, "INVALID_TIMESTAMP"));
+check("bad lunch_minutes -> INVALID_LUNCH_MINUTES", hasCode(await patchShift(recordedShiftId, { reason: "x", lunch_minutes: -1 }), 400, "INVALID_LUNCH_MINUTES") && hasCode(await patchShift(recordedShiftId, { reason: "x", lunch_minutes: 12.5 }), 400, "INVALID_LUNCH_MINUTES"));
+check("finish before paid start -> INVALID_SHIFT_TIMES", hasCode(await patchShift(recordedShiftId, { reason: "x", finish_at: riga("09", "08:00") }), 400, "INVALID_SHIFT_TIMES"));
+check("finish in the future -> FINISH_IN_FUTURE", hasCode(await patchShift(recordedShiftId, { reason: "x", finish_at: riga("30", "21:00"), paid_start_at: riga("30", "19:00") }), 400, "FINISH_IN_FUTURE"));
+check("no real change -> NO_CHANGES", hasCode(await patchShift(recordedShiftId, { reason: "x", lunch_minutes: 45 }), 400, "NO_CHANGES"));
+check("rejected corrections write no audit row", (await auditOf(recordedShiftId)).length === 0);
+
+// The rate changes after the shift was paid: a correction must keep the original rate.
+await call("PUT", `/workers/${payId}`, { token: admin, body: payBody({ hourly_rate: 20 }) });
+const fixed = await patchShift(recordedShiftId, { reason: correctReason, paid_start_at: riga("09", "08:00") });
+check("correction recalculates (08:00-17:00 less 45 = 8.25 h)", fixed.status === 200 && Number(fixed.data.shift.total_worked_hours) === 8.25, JSON.stringify(fixed.data?.shift?.total_worked_hours));
+check("correction keeps the rate the shift was paid at", Number(fixed.data?.shift?.daily_earned) === 82.5);
+await call("PUT", `/workers/${payId}`, { token: admin, body: payBody({ hourly_rate: 10 }) });
+let audit = await auditOf(recordedShiftId);
+check("audit: one row with who, why and when", audit.length === 1 && audit[0].admin_username.toLowerCase() === ADMIN_USERNAME.toLowerCase() && Number.isInteger(audit[0].admin_id) && audit[0].reason === correctReason && Boolean(audit[0].created_at), JSON.stringify(audit[0]));
+check("audit: old and new values", sameInstant(audit[0].old_values.paid_start_at, riga("09", "08:05")) && sameInstant(audit[0].new_values.paid_start_at, riga("09", "08:00")) && audit[0].old_values.total_worked_hours === 8.17 && audit[0].new_values.total_worked_hours === 8.25 && audit[0].old_values.daily_earned === 81.7 && audit[0].new_values.daily_earned === 82.5);
+const moved = await patchShift(recordedShiftId, { reason: "Left later", finish_at: riga("09", "18:00"), lunch_minutes: 60 });
+check("finish and lunch corrected together (08:00-18:00 less 60 = 9 h)", Number(moved.data?.shift?.total_worked_hours) === 9 && moved.data.shift.lunch_minutes === 60 && sameInstant(moved.data.shift.lunch_planned_end_at, riga("09", "13:00")));
+audit = await auditOf(recordedShiftId);
+check("audit: each correction is its own row, newest first", audit.length === 2 && audit[0].reason === "Left later" && audit[1].reason === correctReason && audit[0].old_values.lunch_minutes === 45 && audit[0].new_values.lunch_minutes === 60);
+const noLunch = await patchShift(recordedShiftId, { reason: "Worked through lunch", lunch_minutes: 0 });
+check("lunch_minutes 0 removes the deduction", Number(noLunch.data?.shift?.total_worked_hours) === 10 && Number(noLunch.data.shift.lunch_deducted_minutes) === 0);
+const exact = await patchShift(elapsedShiftId, { reason: "Lunch was 30 minutes", lunch_minutes: 30 });
+check("admin's lunch figure is deducted exactly on a finish-during-lunch shift", Number(exact.data?.shift?.lunch_deducted_minutes) === 30 && Number(exact.data.shift.total_worked_hours) === 3.83, JSON.stringify(exact.data?.shift?.lunch_deducted_minutes));
+
+const forgot = await punchAt(riga("23", "07:45"));
+await setClock(riga("23", "20:00"));
+check("running shift needs finish_at -> SHIFT_STILL_ACTIVE", hasCode(await patchShift(forgot.data.log.id, { reason: "x", paid_start_at: riga("23", "07:50") }), 409, "SHIFT_STILL_ACTIVE"));
+const closed = await patchShift(forgot.data.log.id, { reason: "Forgot to finish", finish_at: riga("23", "17:00") });
+check("finish_at ends a forgotten shift (no lunch: 60 deducted, 8 h)", closed.status === 200 && closed.data.shift.status === "Completed" && Number(closed.data.shift.total_worked_hours) === 8 && Number(closed.data.shift.daily_earned) === 80);
+check("worker can start a new shift afterwards", (await call("GET", "/attendance/active", { token: payToken })).data?.activeShift === null);
+
+console.log("-- reports");
+const juneRows = async (extra = {}) => {
+  const query = new URLSearchParams({ start_date: "2025-06-01", end_date: "2025-06-30", search: `pay-${run}`, ...extra });
+  return call("GET", `/reports?${query}`, { token: admin });
+};
+const legacyJune = await juneRows();
+const latePaged = await juneRows({ page: "1", page_size: "100" });
+const exportedJune = await call("GET", `/reports/export?${new URLSearchParams({ start_date: "2025-06-01", end_date: "2025-06-30", search: `pay-${run}` })}`, { token: admin });
+const dayRow = (rows, date) => rows?.find((r) => r.work_date === date);
+for (const [label, rows] of [["legacy", legacyJune.data?.shifts], ["paged", latePaged.data?.rows], ["export", exportedJune.data?.rows]]) {
+  const row = dayRow(rows, "2025-06-04");
+  check(`${label} report row: arrival, paid start, waiting, lateness`, row && sameInstant(row.arrival_at, riga("04", "07:50")) && sameInstant(row.paid_start_at, riga("04", "08:05")) && row.waiting_minutes === 15 && row.lateness_minutes === 5, JSON.stringify(row && { w: row.waiting_minutes, l: row.lateness_minutes }));
+  const lunchRow = dayRow(rows, "2025-06-13");
+  check(`${label} report row: lunch minutes and hours`, lunchRow && lunchRow.lunch_minutes === 30 && Number(lunchRow.lunch_deducted_minutes) === 30 && Number(lunchRow.total_worked_hours) === 3.83);
+}
+const oldRow = (await report({ search: `pag-a-${run}`, page: "1" })).data?.rows?.[0];
+check("rows inserted without the new columns still report (lateness unknown)", oldRow && oldRow.lateness_minutes === null && oldRow.waiting_minutes === null);
+await releaseClock();
+
 console.log("== Errors and CORS");
 const bad = await call("POST", "/admin/login", { raw: "{not json" });
 check("malformed JSON -> 400 JSON", bad.status === 400 && typeof bad.data?.error === "string", JSON.stringify(bad.data));
@@ -208,6 +415,8 @@ check("unknown route -> 404 JSON", nf.status === 404 && nf.data?.error === "Not 
 if (ALLOWED_ORIGIN) {
   const okOrigin = await call("GET", "/health", { headers: { Origin: ALLOWED_ORIGIN } });
   check("CORS allowed origin", okOrigin.headers.get("access-control-allow-origin") === ALLOWED_ORIGIN);
+  const exposed = (okOrigin.headers.get("access-control-expose-headers") ?? "").split(",").map((h) => h.trim().toLowerCase());
+  check("CORS exposes the Date header", exposed.includes("date"), okOrigin.headers.get("access-control-expose-headers") ?? "(missing)");
 }
 const evilOrigin = await call("GET", "/health", { headers: { Origin: "https://evil.example" } });
 check("CORS other origin blocked", !evilOrigin.headers.get("access-control-allow-origin"));
