@@ -277,7 +277,7 @@ check("per-worker start time applies (09:30, arrive 09:20 -> 09:35, late 5)", sa
 await call("PUT", `/workers/${payId}`, { token: admin, body: payBody({ work_start_time: "08:00" }) });
 const stillCustom = await call("GET", "/attendance/active", { token: payToken });
 check("editing the worker doesn't change a running shift", sameInstant(stillCustom.data?.activeShift?.scheduled_start_at, riga("07", "09:30")));
-check("active: includes schedule and rules", stillCustom.data?.schedule?.work_start === "08:00" && stillCustom.data?.schedule?.arrive_by === "07:45" && stillCustom.data?.rules?.lunch_min_minutes === 40 && stillCustom.data?.rules?.lunch_max_minutes === 60);
+check("active: includes schedule and rules", stillCustom.data?.schedule?.work_start === "08:00" && stillCustom.data?.schedule?.arrive_by === "07:45" && stillCustom.data?.rules?.lunch_min_minutes === 30 &&stillCustom.data?.rules?.lunch_max_minutes === 60);
 await finishAt(riga("07", "16:00"));
 
 console.log("-- lunch rules");
@@ -286,7 +286,7 @@ check("end-work with no active shift -> 404 NO_ACTIVE_SHIFT", hasCode(await fini
 
 // Mon 9 Jun: arrive 07:50, paid from 08:05.
 await punchAt(riga("09", "07:50"));
-for (const minutes of [39, 61, "50", 45.5, null, undefined]) {
+for (const minutes of [29, 61, 0, "50", 45.5, null, undefined]) {
   check(`lunch minutes ${JSON.stringify(minutes)} -> 400 INVALID_LUNCH_MINUTES`, hasCode(await lunchAt(riga("09", "12:05"), minutes), 400, "INVALID_LUNCH_MINUTES"));
 }
 check("lunch at 11:59:59 -> LUNCH_WINDOW_NOT_OPEN", hasCode(await lunchAt(riga("09", "11:59:59"), 45), 409, "LUNCH_WINDOW_NOT_OPEN"));
@@ -294,7 +294,8 @@ const noBody = await call("POST", "/attendance/lunch", { token: payToken });
 check("lunch without a body -> 400", hasCode(noBody, 400, "INVALID_LUNCH_MINUTES"));
 const lunchOk = await lunchAt(riga("09", "12:00"), 45);
 check("lunch at 12:00 for 45 min accepted", lunchOk.status === 200 && lunchOk.data.log.lunch_minutes === 45, JSON.stringify(lunchOk.data?.code ?? ""));
-check("lunch fields stored", sameInstant(lunchOk.data?.log?.lunch_started_at, riga("09", "12:00")) && sameInstant(lunchOk.data?.log?.lunch_planned_end_at, riga("09", "12:45")) && sameInstant(lunchOk.data?.server_now, riga("09", "12:00")));
+check("lunch response includes the rules (min 30, max 60)", lunchOk.data?.rules?.lunch_min_minutes === 30 && lunchOk.data.rules.lunch_max_minutes === 60);
+check("lunch fields stored",sameInstant(lunchOk.data?.log?.lunch_started_at, riga("09", "12:00")) && sameInstant(lunchOk.data?.log?.lunch_planned_end_at, riga("09", "12:45")) && sameInstant(lunchOk.data?.server_now, riga("09", "12:00")));
 check("double lunch -> LUNCH_ALREADY_TAKEN", hasCode(await lunchAt(riga("09", "12:10"), 45), 409, "LUNCH_ALREADY_TAKEN"));
 check("second lunch after the first ended -> LUNCH_ALREADY_TAKEN", hasCode(await lunchAt(riga("09", "12:30"), 40), 409, "LUNCH_ALREADY_TAKEN"));
 check("end-lunch action removed", (await call("POST", "/attendance/lunch-end", { token: payToken })).status === 404);
@@ -324,7 +325,7 @@ await finishAt(riga("12", "17:00"));
 
 console.log("-- deductions");
 await punchAt(riga("13", "07:45"));
-await lunchAt(riga("13", "12:00"), 60);
+check("lunch of 60 min (the maximum) accepted", (await lunchAt(riga("13", "12:00"), 60)).status === 200);
 done = await finishAt(riga("13", "12:20"));
 check("finish during lunch deducts elapsed only (08:00-12:20 less 20 = 4.00 h)", done.data?.summary?.worked_hours === 4 && done.data.summary.lunch_deducted_minutes === 20 && done.data.summary.lunch_deduction_type === "elapsed", JSON.stringify(done.data?.summary));
 check("finish during lunch: lunch_end is the finish", sameInstant(done.data?.log?.lunch_end_time, riga("13", "12:20")));
@@ -346,6 +347,17 @@ await punchAt(riga("20", "07:45"));
 await setClock(riga("20", "08:00"));
 const raceFinish = await Promise.all([call("POST", "/attendance/end-work", { token: payToken }), call("POST", "/attendance/end-work", { token: payToken })]);
 check("concurrent finish: exactly one succeeds", raceFinish.map((r) => r.status).sort().join(",") === "200,404", raceFinish.map((r) => r.status).join(","));
+
+// The shortest lunches: 30 (the minimum) and 35 minutes.
+await punchAt(riga("24", "07:45"));
+const minLunch = await lunchAt(riga("24", "12:00"), 30);
+check("lunch of 30 min (the minimum) accepted", minLunch.status === 200 && minLunch.data.log.lunch_minutes === 30 && sameInstant(minLunch.data.log.lunch_planned_end_at, riga("24", "12:30")), JSON.stringify(minLunch.data?.code ?? ""));
+done = await finishAt(riga("24", "16:30"));
+check("30 min lunch deducted (08:00-16:30 less 30 = 8.00 h)", done.data?.summary?.worked_hours === 8 && done.data.summary.earned_today === 80 && done.data.summary.lunch_deducted_minutes === 30 && done.data.summary.lunch_deduction_type === "recorded", JSON.stringify(done.data?.summary));
+await punchAt(riga("25", "07:45"));
+check("lunch of 35 min accepted", (await lunchAt(riga("25", "12:30"), 35)).status === 200);
+done = await finishAt(riga("25", "17:00"));
+check("35 min lunch deducted (08:00-17:00 less 35 = 8.42 h)", done.data?.summary?.worked_hours === 8.42 && done.data.summary.lunch_deducted_minutes === 35 && done.data.summary.lunch_deduction_type === "recorded", JSON.stringify(done.data?.summary));
 
 console.log("-- admin correction");
 const patchShift = (id, body, token = admin) => call("PATCH", `/shifts/${id}`, { token, body });

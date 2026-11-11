@@ -1,4 +1,5 @@
 import { Platform } from "react-native";
+import Constants, { ExecutionEnvironment } from "expo-constants";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
@@ -109,12 +110,25 @@ if (!TaskManager.isTaskDefined(LOCATION_TASK)) {
   });
 }
 
-export async function startBackgroundGeofenceMonitoring(): Promise<boolean> {
-  if (Platform.OS === "web") return false;
+/**
+ * Expo Go cannot run background location (iOS rejects it for missing
+ * NSLocation*UsageDescription keys, which only an installed build has), so the
+ * background task is never started there.
+ */
+export const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
-  const permission = await Location.requestBackgroundPermissionsAsync();
-  if (permission.status !== "granted") return false;
+/**
+ * - "started": the background task is running (or already was).
+ * - "expo-go": running in Expo Go; checks happen only while the app is open.
+ * - "permission-denied": the worker did not allow background location.
+ * - "failed": the OS refused to start it; checks happen only while the app is open.
+ * - "unsupported": web.
+ */
+export type BackgroundStartResult = "started" | "expo-go" | "permission-denied" | "failed" | "unsupported";
 
+let expoGoLogged = false;
+
+async function prepareNotifications(): Promise<void> {
   if (Platform.OS === "android") {
     await Notifications.setNotificationChannelAsync("geofence-alerts", {
       name: "Workplace geofence",
@@ -122,33 +136,59 @@ export async function startBackgroundGeofenceMonitoring(): Promise<boolean> {
     });
   }
   await Notifications.requestPermissionsAsync();
-  await SecureStore.setItemAsync("background_shift_active", "true");
+}
 
-  const alreadyStarted =
-    await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK);
-  if (!alreadyStarted) {
-    await Location.startLocationUpdatesAsync(LOCATION_TASK, {
-      accuracy: Location.Accuracy.High,
-      timeInterval: CHECK_INTERVAL_MS,
-      distanceInterval: 0,
-      pausesUpdatesAutomatically: false,
-      showsBackgroundLocationIndicator: true,
-      foregroundService:
-        Platform.OS === "android"
-          ? {
-              notificationTitle: "TimeTrack shift tracking",
-              notificationBody: "Checking your workplace location during your active shift.",
-              killServiceOnDestroy: false,
-            }
-          : undefined,
-    });
+/** Never throws: a background-location failure must not break the shift screen. */
+export async function startBackgroundGeofenceMonitoring(): Promise<BackgroundStartResult> {
+  if (Platform.OS === "web") return "unsupported";
+
+  if (isExpoGo) {
+    if (!expoGoLogged) {
+      expoGoLogged = true;
+      console.log("Expo Go: background location is not available; location is checked while the app is open.");
+    }
+    // The lunch reminder still needs notification permission and the Android channel.
+    await prepareNotifications().catch(() => {});
+    return "expo-go";
   }
-  return true;
+
+  try {
+    const permission = await Location.requestBackgroundPermissionsAsync();
+    if (permission.status !== "granted") return "permission-denied";
+
+    await prepareNotifications();
+    await SecureStore.setItemAsync("background_shift_active", "true");
+
+    const alreadyStarted =
+      await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK);
+    if (!alreadyStarted) {
+      await Location.startLocationUpdatesAsync(LOCATION_TASK, {
+        accuracy: Location.Accuracy.High,
+        timeInterval: CHECK_INTERVAL_MS,
+        distanceInterval: 0,
+        pausesUpdatesAutomatically: false,
+        showsBackgroundLocationIndicator: true,
+        foregroundService:
+          Platform.OS === "android"
+            ? {
+                notificationTitle: "TimeTrack shift tracking",
+                notificationBody: "Checking your workplace location during your active shift.",
+                killServiceOnDestroy: false,
+              }
+            : undefined,
+      });
+    }
+    return "started";
+  } catch (err) {
+    console.log("Background location could not be started; checking only while the app is open.", err);
+    return "failed";
+  }
 }
 
 export async function stopBackgroundGeofenceMonitoring(): Promise<void> {
   await SecureStore.setItemAsync("background_shift_active", "false");
-  if (Platform.OS === "web") return;
+  // Nothing was started in Expo Go (see startBackgroundGeofenceMonitoring).
+  if (Platform.OS === "web" || isExpoGo) return;
   if (await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK)) {
     await Location.stopLocationUpdatesAsync(LOCATION_TASK);
   }

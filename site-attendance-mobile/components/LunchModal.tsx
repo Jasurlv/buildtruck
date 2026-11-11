@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 type LunchModalProps = {
   options: number[];
@@ -30,59 +30,64 @@ export default function LunchModal({
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Close">
-        {/* Taps inside the sheet must not close it. */}
-        <Pressable style={styles.sheet} onPress={() => {}}>
-          <Text style={styles.title}>Start lunch</Text>
-          <Text style={styles.subtitle}>How long will your lunch be?</Text>
+      <View style={styles.backdrop}>
+        {/* Tapping the dimmed area closes it; it sits behind the sheet, so taps
+            inside the sheet never reach it. */}
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
+        {/* The sheet scrolls when it is taller than the screen (small phones). */}
+        <View style={styles.sheet}>
+          <ScrollView contentContainerStyle={styles.sheetContent} bounces={false}>
+            <Text style={styles.title}>Start lunch</Text>
+            <Text style={styles.subtitle}>How long will your lunch be?</Text>
 
-          <View style={styles.options}>
-            {options.map((option) => {
-              const selected = option === minutes;
-              return (
-                <TouchableOpacity
-                  key={option}
-                  style={[styles.option, selected && styles.optionSelected]}
-                  onPress={() => setMinutes(option)}
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected }}
-                >
-                  <Text style={[styles.optionText, selected && styles.optionTextSelected]}>
-                    {option}
-                  </Text>
-                  <Text style={[styles.optionUnit, selected && styles.optionTextSelected]}>min</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+            <View style={styles.options}>
+              {options.map((option) => {
+                const selected = option === minutes;
+                return (
+                  <TouchableOpacity
+                    key={option}
+                    style={[styles.option, selected && styles.optionSelected]}
+                    onPress={() => setMinutes(option)}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected }}
+                  >
+                    <Text style={[styles.optionText, selected && styles.optionTextSelected]}>
+                      {option}
+                    </Text>
+                    <Text style={[styles.optionUnit, selected && styles.optionTextSelected]}>min</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
 
-          <Text style={styles.note}>
-            A shorter lunch means more paid time. Once you confirm, the lunch cannot be
-            shortened or ended early: paid time resumes automatically after {minutes} minutes.
-          </Text>
-
-          <TouchableOpacity
-            style={[styles.confirmButton, submitting && styles.disabled]}
-            onPress={() => onConfirm(minutes)}
-            disabled={submitting}
-          >
-            <Text style={styles.confirmText}>
-              {submitting ? "Starting..." : `Start ${minutes}-minute lunch`}
+            <Text style={styles.note}>
+              A shorter lunch means more paid time. Once you confirm, the lunch cannot be
+              shortened or ended early: paid time resumes automatically after {minutes} minutes.
             </Text>
-          </TouchableOpacity>
 
-          {canRemind && (
-            <TouchableOpacity style={styles.secondaryButton} onPress={onRemind}>
-              <Text style={styles.secondaryText}>Remind me in 15 minutes</Text>
+            <TouchableOpacity
+              style={[styles.confirmButton, submitting && styles.disabled]}
+              onPress={() => onConfirm(minutes)}
+              disabled={submitting}
+            >
+              <Text style={styles.confirmText}>
+                {submitting ? "Starting..." : `Start ${minutes}-minute lunch`}
+              </Text>
             </TouchableOpacity>
-          )}
-          <Text style={styles.hint}>Lunch can be started until {latestStartLabel}.</Text>
 
-          <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
-            <Text style={styles.cancelText}>Cancel</Text>
-          </TouchableOpacity>
-        </Pressable>
-      </Pressable>
+            {canRemind && (
+              <TouchableOpacity style={styles.secondaryButton} onPress={onRemind}>
+                <Text style={styles.secondaryText}>Remind me in 15 minutes</Text>
+              </TouchableOpacity>
+            )}
+            <Text style={styles.hint}>Lunch can be started until {latestStartLabel}.</Text>
+
+            <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
+              <Text style={styles.cancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -94,14 +99,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 20,
   },
-  sheet: { backgroundColor: "#ffffff", borderRadius: 20, padding: 22 },
+  sheet: { backgroundColor: "#ffffff", borderRadius: 20, maxHeight: "100%", overflow: "hidden" },
+  sheetContent: { padding: 22 },
   title: { fontSize: 20, fontWeight: "bold", color: "#111827" },
   subtitle: { fontSize: 14, color: "#6b7280", marginTop: 4, marginBottom: 16 },
+  // Four per row on any phone width (7 options -> 4 + 3), wrapping, never clipped.
   options: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 16 },
   option: {
-    minWidth: 56,
+    width: "22%",
     paddingVertical: 12,
-    paddingHorizontal: 10,
+    paddingHorizontal: 4,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: "#d1d5db",

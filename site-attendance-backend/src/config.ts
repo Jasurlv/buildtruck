@@ -112,7 +112,8 @@ export function getWorkRules(): WorkRules {
     changingAllowanceMinutes: numberEnv("CHANGING_ALLOWANCE_MINUTES", 15),
     lunchOpensAt: clockEnv("LUNCH_OPENS_AT", "12:00"),
     lunchLatestStart: clockEnv("LUNCH_LATEST_START", "12:30"),
-    lunchMinMinutes: numberEnv("LUNCH_MIN_MINUTES", 40),
+    // A worker picks a whole number of minutes from min to max (30-60 by default).
+    lunchMinMinutes: numberEnv("LUNCH_MIN_MINUTES", 30),
     lunchMaxMinutes: numberEnv("LUNCH_MAX_MINUTES", 60),
     lunchDefaultDeductionMinutes: numberEnv("LUNCH_DEFAULT_DEDUCTION_MINUTES", 60),
     lunchAutoDeductMinShiftHours: numberEnv("LUNCH_AUTO_DEDUCT_MIN_SHIFT_HOURS", 5, false),

@@ -119,7 +119,7 @@ unset ADMIN_USERNAME ADMIN_PASSWORD
 
 ## 7. Optional but recommended: end-to-end test on this server
 
-This runs the full API test suite (150 checks) with the server's own Node 22 and
+This runs the full API test suite (158 checks) with the server's own Node 22 and
 PostgreSQL 16. It uses a throwaway database `timetrack_e2e` and port 5055, then deletes the
 database. Production data is not touched.
 
@@ -282,6 +282,6 @@ custom-format dumps, so use a plain SQL dump:
 | `DB_POOL_MAX` | | Max PostgreSQL connections (default 10) |
 | `CHANGING_ALLOWANCE_MINUTES` | | Minutes to change clothes before paid time starts (default 15) |
 | `LUNCH_OPENS_AT` / `LUNCH_LATEST_START` | | Lunch can start in this window, `HH:MM` in `APP_TIMEZONE` (default `12:00` / `12:30`) |
-| `LUNCH_MIN_MINUTES` / `LUNCH_MAX_MINUTES` | | Lunch lengths a worker can choose (default 40 / 60) |
+| `LUNCH_MIN_MINUTES` / `LUNCH_MAX_MINUTES` | | Lunch lengths a worker can choose, whole minutes from min to max (default 30 / 60; the app offers them in 5-minute steps) |
 | `LUNCH_DEFAULT_DEDUCTION_MINUTES` | | Deducted when no lunch was recorded (default 60) |
 | `LUNCH_AUTO_DEDUCT_MIN_SHIFT_HOURS` | | That deduction applies to shifts longer than this (default 5) |

@@ -30,6 +30,7 @@ import {
 import {
   startBackgroundGeofenceMonitoring,
   stopBackgroundGeofenceMonitoring,
+  type BackgroundStartResult,
 } from "../utils/backgroundGeofence";
 
 const LUNCH_REMINDER_MS = 15 * 60 * 1000;
@@ -37,6 +38,25 @@ const LUNCH_REMINDER_MS = 15 * 60 * 1000;
 // "Remind me in 15 minutes" is client-only. Kept outside the component so it
 // survives leaving and reopening this screen.
 let lunchReminder: { shiftId: number | undefined; atMs: number; notificationId: string | null } | null = null;
+
+// The "background location unavailable" notice is shown once per app session,
+// not every time this screen opens.
+let backgroundNoticeShown = false;
+
+const BACKGROUND_NOTICES: Partial<Record<BackgroundStartResult, string>> = {
+  "expo-go":
+    "Background location needs the installed TimeTrack app (development build). In Expo Go, your location is checked while the app is open.",
+  "permission-denied":
+    "Location checks will run only while the app is open. Enable background location permission for checks while using other apps.",
+  failed: "Location checks will run only while the app is open.",
+};
+
+function showBackgroundNoticeOnce(result: BackgroundStartResult): void {
+  const message = BACKGROUND_NOTICES[result];
+  if (!message || backgroundNoticeShown) return;
+  backgroundNoticeShown = true;
+  Alert.alert("Background location unavailable", message);
+}
 
 async function clearLunchReminder(): Promise<void> {
   const notificationId = lunchReminder?.notificationId;
@@ -176,24 +196,10 @@ export default function ActiveShiftScreen() {
     }
 
     if (!isMounted.current) return;
-    try {
-      const backgroundStarted = await startBackgroundGeofenceMonitoring();
-      if (!backgroundStarted && isMounted.current) {
-        Alert.alert(
-          "Background location unavailable",
-          "Location checks will run only while the app is open. Enable background location permission for checks while using other apps.",
-        );
-      }
-    } catch (err) {
-      console.error("Failed to start background location:", err);
-      if (isMounted.current) {
-        Alert.alert(
-          "Background location unavailable",
-          "Location checks will run only while the app is open.",
-        );
-      }
-    }
+    // Never throws; in Expo Go it does not try to start background location.
+    const backgroundResult = await startBackgroundGeofenceMonitoring();
     if (!isMounted.current) return;
+    showBackgroundNoticeOnce(backgroundResult);
     checkWorkerPosition(workerData);
 
     geofenceInterval.current = setInterval(
@@ -423,6 +429,20 @@ export default function ActiveShiftScreen() {
   const paidStartLabel = label(times.paid_start, status?.paidStartAt ?? null);
   const lunchEndLabel = label(times.lunch_planned_end, status?.lunchPlannedEndAt ?? null);
 
+  // Changing clothes: "N minutes" is the server's allowance, unless the worker
+  // arrived early and the wait is longer; then it is the time left until paid start.
+  const isChanging = phase === "changing" && status !== null;
+  const allowanceMinutes = rules?.changing_allowance_minutes ?? null;
+  const arrivalMs = Date.parse(shift?.arrival_at ?? shift?.punch_in_time ?? "");
+  const isLongWait =
+    isChanging &&
+    (allowanceMinutes === null ||
+      !Number.isFinite(arrivalMs) ||
+      status.paidStartAt.getTime() - arrivalMs > allowanceMinutes * 60_000);
+  const minutesLeft = isChanging ? Math.max(1, Math.ceil(status.msUntilPaidStart / 60_000)) : 0;
+  const changingMinutes = isLongWait ? minutesLeft : (allowanceMinutes ?? 0);
+  const minutesWord = (n: number) => `${n} ${n === 1 ? "minute" : "minutes"}`;
+
   let lunchButtonText = "Start lunch";
   if (availability === "before") {
     lunchButtonText = `Lunch available from ${rules?.lunch_opens_local}`;
@@ -443,6 +463,21 @@ export default function ActiveShiftScreen() {
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Shift in Progress</Text>
         </View>
+
+        {isChanging && (
+          <View style={styles.changingIntro}>
+            <Text style={styles.changingHeading} accessibilityRole="header">
+              {isLongWait
+                ? `You have ${minutesWord(changingMinutes)} before work starts`
+                : `You have ${minutesWord(changingMinutes)} to change clothes`}
+            </Text>
+            <Text style={styles.changingText}>
+              {isLongWait
+                ? `Your paid time starts at ${paidStartLabel}. Use the time to change clothes and get ready.`
+                : "Get ready for work. Your paid time starts automatically when the countdown ends."}
+            </Text>
+          </View>
+        )}
 
         {/* Location Tracking Banner */}
         <View style={[styles.trackingBanner, onLunch && styles.pausedBanner]}>
@@ -532,15 +567,19 @@ export default function ActiveShiftScreen() {
             </TouchableOpacity>
           )}
 
-          <TouchableOpacity
-            style={styles.finishButton}
-            onPress={handleFinishWork}
-            disabled={isFinishing}
-          >
-            <Text style={styles.finishButtonText}>
-              {isFinishing ? "Finishing..." : "Finish Work"}
-            </Text>
-          </TouchableOpacity>
+          {/* Hidden until the shift is loaded and paid time has started; the
+              1-second tick switches the phase without a tap. */}
+          {shift !== null && phase !== "changing" && (
+            <TouchableOpacity
+              style={styles.finishButton}
+              onPress={handleFinishWork}
+              disabled={isFinishing}
+            >
+              <Text style={styles.finishButtonText}>
+                {isFinishing ? "Finishing..." : "Finish Work"}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       </ScrollView>
 
@@ -651,6 +690,14 @@ const styles = StyleSheet.create({
   },
   backButtonText: { color: "#374151", fontWeight: "bold", fontSize: 13 },
   headerTitle: { fontSize: 18, fontWeight: "bold", color: "#111827" },
+  changingIntro: { marginBottom: 16 },
+  changingHeading: {
+    fontSize: 24,
+    fontWeight: "bold",
+    color: "#111827",
+    marginBottom: 6,
+  },
+  changingText: { fontSize: 15, color: "#4b5563", lineHeight: 21 },
   trackingBanner: {
     backgroundColor: "#ecfdf5",
     borderWidth: 1,
