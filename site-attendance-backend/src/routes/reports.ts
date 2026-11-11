@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import pool from "../db/pool.js";
 import { getAppTimezone } from "../config.js";
+import { closeOverdueShifts } from "../shiftStore.js";
 import { parseId } from "../validation.js";
 
 const router = Router();
@@ -83,7 +84,8 @@ const ROW_COLUMNS = `
   CASE WHEN a.scheduled_start_at IS NOT NULL
     THEN GREATEST(0, ROUND(EXTRACT(EPOCH FROM (a.paid_start_at - a.scheduled_start_at)) / 60))::int
   END AS lateness_minutes,
-  a.lunch_minutes, a.lunch_deducted_minutes`;
+  a.lunch_minutes, a.lunch_deducted_minutes,
+  a.break_minutes, a.auto_closed`;
 
 // Stable across pages: ids break ties within a day.
 const ORDER_BY = "ORDER BY a.work_date DESC, a.id DESC";
@@ -136,6 +138,8 @@ router.get("/", async (req: Request, res: Response): Promise<any> => {
 
   const paginated = req.query.page !== undefined || req.query.page_size !== undefined;
   try {
+    // Lazy check: shifts past the limit show as closed even if the timer has not run yet.
+    await closeOverdueShifts(new Date());
     if (!paginated) {
       const result = await pool.query(
         `SELECT ${ROW_COLUMNS} ${FROM_REPORT} WHERE ${where} ${ORDER_BY} LIMIT ${LEGACY_ROW_LIMIT}`,
@@ -196,6 +200,7 @@ router.get("/export", async (req: Request, res: Response): Promise<any> => {
   const { where, params } = whereClause(filters);
 
   try {
+    await closeOverdueShifts(new Date());
     const totals = await queryTotals(where, params);
     if (totals.periods > EXPORT_MAX_ROWS) {
       return res.status(400).json({

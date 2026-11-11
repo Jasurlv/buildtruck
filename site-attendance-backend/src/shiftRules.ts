@@ -74,15 +74,34 @@ export function lunchWindow(now: Date, rules: WorkRules, timezone: string) {
 
 export type LunchDeductionType = "recorded" | "elapsed" | "default" | "none";
 
+/** A break (or other pause); an open one has no end yet. */
+export type PauseInterval = { startedAt: Date; endedAt: Date | null };
+
+/**
+ * Total pause time inside [paidStart, until]. An open pause runs until `until`.
+ * Clipping keeps the figure right when an admin moves the paid start or finish.
+ */
+export function pauseMs(pauses: PauseInterval[], paidStart: Date, until: Date): number {
+  let total = 0;
+  for (const pause of pauses) {
+    const start = Math.max(pause.startedAt.getTime(), paidStart.getTime());
+    const end = Math.min((pause.endedAt ?? until).getTime(), until.getTime());
+    total += Math.max(0, end - start);
+  }
+  return total;
+}
+
 export type ShiftPayInput = {
   paidStart: Date;
   finish: Date;
   lunchStartedAt: Date | null;
   lunchMinutes: number | null;
   lunchPlannedEndAt: Date | null;
+  /** Breaks taken during the shift (default: none). */
+  breaks?: PauseInterval[];
 };
 
-/** worked = finish - paid start - lunch deduction, never below 0. */
+/** worked = finish - paid start - lunch deduction - breaks, never below 0. */
 export function computeShiftPay(input: ShiftPayInput, rules: WorkRules, hourlyRate: number) {
   const { paidStart, finish, lunchStartedAt, lunchMinutes, lunchPlannedEndAt } = input;
   const paidMs = Math.max(0, finish.getTime() - paidStart.getTime());
@@ -103,13 +122,16 @@ export function computeShiftPay(input: ShiftPayInput, rules: WorkRules, hourlyRa
     type = "default";
   }
   deductionMs = Math.min(deductionMs, paidMs);
+  // Breaks never overlap a lunch (each is refused while the other runs), so they add up.
+  const breakMs = Math.min(pauseMs(input.breaks ?? [], paidStart, finish), paidMs - deductionMs);
 
-  const workedHours = parseFloat(((paidMs - deductionMs) / HOUR_MS).toFixed(2));
+  const workedHours = parseFloat(((paidMs - deductionMs - breakMs) / HOUR_MS).toFixed(2));
   return {
     workedHours,
     earned: parseFloat((workedHours * hourlyRate).toFixed(2)),
     lunchDeductedMinutes: parseFloat((deductionMs / MINUTE_MS).toFixed(2)),
     lunchDeductionType: type,
+    breakMinutes: parseFloat((breakMs / MINUTE_MS).toFixed(2)),
   };
 }
 
@@ -128,6 +150,42 @@ function minutesBetween(from: unknown, to: unknown): number | null {
 }
 
 export type ShiftRow = Record<string, any>;
+
+/** A shift_pauses row as stored. */
+export type PauseRow = { id: number; started_at: Date | string; ended_at: Date | string | null };
+
+export const toPauseInterval = (pause: PauseRow): PauseInterval => ({
+  startedAt: new Date(pause.started_at),
+  endedAt: pause.ended_at ? new Date(pause.ended_at) : null,
+});
+
+/**
+ * The shift's breaks for clients: the list, the open one (if any) and the total so
+ * far. `now` is the server time; a finished shift counts up to its finish.
+ */
+export function breakFields(row: ShiftRow, breaks: PauseRow[], now: Date, timezone: string) {
+  const open = breaks.find((pause) => !pause.ended_at) ?? null;
+  const paidStart = new Date(row.paid_start_at ?? row.punch_in_time);
+  const until = row.end_work_time ? new Date(row.end_work_time) : now;
+  return {
+    breaks: breaks.map((pause) => ({
+      id: pause.id,
+      started_at: new Date(pause.started_at).toISOString(),
+      ended_at: pause.ended_at ? new Date(pause.ended_at).toISOString() : null,
+    })),
+    open_break: open
+      ? {
+          id: open.id,
+          started_at: new Date(open.started_at).toISOString(),
+          // "HH:MM" in the sites' timezone, whatever timezone the phone is set to.
+          local_started: localTime(new Date(open.started_at), timezone),
+        }
+      : null,
+    break_minutes: parseFloat(
+      (pauseMs(breaks.map(toPauseInterval), paidStart, until) / MINUTE_MS).toFixed(2),
+    ),
+  };
+}
 
 /** A shift as sent to clients: the stored row plus every value they display. */
 export function shiftView(row: ShiftRow, timezone: string) {
@@ -168,5 +226,6 @@ export function rulesView(now: Date, rules: WorkRules, timezone: string) {
     lunch_min_minutes: rules.lunchMinMinutes,
     lunch_max_minutes: rules.lunchMaxMinutes,
     lunch_default_deduction_minutes: rules.lunchDefaultDeductionMinutes,
+    max_shift_hours: rules.maxShiftHours,
   };
 }

@@ -100,7 +100,7 @@ node --env-file=/etc/buildtruck/api.env dist/scripts/migrate.js
 ```
 
 Expected output: `Applied 001_create_admins.sql`, `002_core_tables.sql`,
-`003_production_hardening.sql`, `004_pay_attendance_rules.sql`, then `Database schema is up to date.` Running it again only
+`003_production_hardening.sql`, `004_pay_attendance_rules.sql`, `005_pauses_auto_close.sql`, then `Database schema is up to date.` Running it again only
 prints the last line.
 
 ## 6. Create the first admin
@@ -119,7 +119,7 @@ unset ADMIN_USERNAME ADMIN_PASSWORD
 
 ## 7. Optional but recommended: end-to-end test on this server
 
-This runs the full API test suite (158 checks) with the server's own Node 22 and
+This runs the full API test suite (217 checks) with the server's own Node 22 and
 PostgreSQL 16. It uses a throwaway database `timetrack_e2e` and port 5055, then deletes the
 database. Production data is not touched.
 
@@ -234,7 +234,7 @@ Push to `main`, then on the server, as `deploy`:
 It pulls, installs, builds, applies new migrations, restarts the service and waits for the
 health check. Each migration runs once, inside a transaction, and is recorded in
 `schema_migrations`. To change the schema, add a new numbered file such as
-`migrations/004_....sql`. Never edit a migration that has already been applied.
+`migrations/006_....sql`. Never edit a migration that has already been applied.
 
 If the systemd unit file changes, copy it again and run `sudo systemctl daemon-reload`.
 
@@ -285,3 +285,4 @@ custom-format dumps, so use a plain SQL dump:
 | `LUNCH_MIN_MINUTES` / `LUNCH_MAX_MINUTES` | | Lunch lengths a worker can choose, whole minutes from min to max (default 30 / 60; the app offers them in 5-minute steps) |
 | `LUNCH_DEFAULT_DEDUCTION_MINUTES` | | Deducted when no lunch was recorded (default 60) |
 | `LUNCH_AUTO_DEDUCT_MIN_SHIFT_HOURS` | | That deduction applies to shifts longer than this (default 5) |
+| `MAX_SHIFT_HOURS` | | A shift still running this many hours after paid start is closed automatically at that time, with the normal deductions (default 14, at most 24) |

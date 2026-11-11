@@ -15,6 +15,7 @@ import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import { useFocusEffect, useRouter } from "expo-router";
 import LunchModal from "../components/LunchModal";
+import { strings } from "../constants/strings";
 import { SessionExpiredError, workerFetch } from "../utils/api";
 import { serverNow } from "../utils/serverClock";
 import {
@@ -24,6 +25,7 @@ import {
   formatDuration,
   lunchAvailability,
   lunchOptions,
+  startedOnEarlierDay,
   type ShiftRules,
   type ShiftTimestamps,
 } from "../utils/shiftTime";
@@ -85,6 +87,9 @@ export default function ActiveShiftScreen() {
   const [isLunchModalOpen, setIsLunchModalOpen] = useState(false);
   const [isLunchSubmitting, setIsLunchSubmitting] = useState(false);
   const [isFinishing, setIsFinishing] = useState(false);
+  const [isBreakSubmitting, setIsBreakSubmitting] = useState(false);
+  // Today's date at the sites (server), to spot a shift left open from an earlier day.
+  const [todayLocal, setTodayLocal] = useState<string | null>(null);
 
   const router = useRouter();
   const locationSubscription = useRef<Location.LocationSubscription | null>(
@@ -113,11 +118,16 @@ export default function ActiveShiftScreen() {
   const isOnLunchNow = () =>
     lunchEndsAtRef.current !== null && serverNow() < lunchEndsAtRef.current;
 
-  const applyShift = (activeShift: ShiftTimestamps, nextRules?: ShiftRules | null) => {
+  const applyShift = (
+    activeShift: ShiftTimestamps,
+    nextRules?: ShiftRules | null,
+    nextToday?: string | null,
+  ) => {
     const lunchEnd = activeShift.lunch_planned_end_at ?? null;
     lunchEndsAtRef.current = lunchEnd ? Date.parse(lunchEnd) : null;
     setShift(activeShift);
     if (nextRules) setRules(nextRules);
+    if (nextToday) setTodayLocal(nextToday);
     setNow(serverNow());
     // Read by the background geofence task, which skips checks until this time.
     void SecureStore.setItemAsync("shift_lunch_paused", lunchEnd ?? "false");
@@ -136,7 +146,11 @@ export default function ActiveShiftScreen() {
       if (!activeResponse.ok) {
         throw new Error("Failed to load active shift");
       }
-      const { activeShift, rules: activeRules } = await activeResponse.json();
+      const {
+        activeShift,
+        rules: activeRules,
+        today_local: activeToday,
+      } = await activeResponse.json();
       if (!isMounted.current || finishedRef.current) return;
       if (!activeShift) {
         // Ended elsewhere (or never started): nothing to show here.
@@ -145,7 +159,7 @@ export default function ActiveShiftScreen() {
       }
 
       setWorker(workerParsed);
-      applyShift(activeShift, activeRules);
+      applyShift(activeShift, activeRules, activeToday);
       if (!geofenceStarted.current) {
         geofenceStarted.current = true;
         void startGeofenceTracking(workerParsed);
@@ -342,7 +356,7 @@ export default function ActiveShiftScreen() {
       }
       await clearLunchReminder();
       setIsLunchModalOpen(false);
-      applyShift(data.log, data.rules);
+      applyShift(data.log, data.rules, data.today_local);
     } catch (err) {
       if (err instanceof SessionExpiredError) return;
       setIsLunchModalOpen(false);
@@ -352,6 +366,30 @@ export default function ActiveShiftScreen() {
       );
     } finally {
       setIsLunchSubmitting(false);
+    }
+  };
+
+  // One button: "Take break" while working, "Resume work" while on a break. The
+  // server records the break; the screen follows its answer.
+  const handleToggleBreak = async () => {
+    const resuming = phase === "break";
+    const failureTitle = resuming ? strings.breakEndFailed : strings.breakStartFailed;
+    setIsBreakSubmitting(true);
+    try {
+      const response = await workerFetch(`/attendance/break/${resuming ? "end" : "start"}`, {
+        method: "POST",
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        void loadShift(); // e.g. already changed on another phone: the server's view wins
+        throw new Error(data.error || failureTitle);
+      }
+      applyShift(data.log, data.rules, data.today_local);
+    } catch (err) {
+      if (err instanceof SessionExpiredError) return;
+      Alert.alert(failureTitle, err instanceof Error ? err.message : strings.connectionError);
+    } finally {
+      setIsBreakSubmitting(false);
     }
   };
 
@@ -374,6 +412,12 @@ export default function ActiveShiftScreen() {
               method: "POST",
             });
             const data = await res.json();
+            if (res.status === 404 && data.code === "NO_ACTIVE_SHIFT") {
+              // Closed meanwhile (e.g. automatically after the maximum length):
+              // reloading returns to the home screen, which explains what happened.
+              void loadShift();
+              return;
+            }
             if (!res.ok) {
               throw new Error(data.error || "Failed to finish work");
             }
@@ -391,6 +435,7 @@ export default function ActiveShiftScreen() {
               earned: Number(data.summary?.earned_today ?? 0),
               lunchMinutes: Number(data.summary?.lunch_deducted_minutes ?? 0),
               lunchType: data.summary?.lunch_deduction_type ?? "none",
+              breakMinutes: Number(data.summary?.break_minutes ?? 0),
               log: data.log ?? {},
             });
             await clearLunchReminder();
@@ -443,6 +488,14 @@ export default function ActiveShiftScreen() {
   const changingMinutes = isLongWait ? minutesLeft : (allowanceMinutes ?? 0);
   const minutesWord = (n: number) => `${n} ${n === 1 ? "minute" : "minutes"}`;
 
+  // A running shift from an earlier day (sites' calendar, server time): probably a
+  // missed Finish tap, so the running estimate would be misleading.
+  const isStaleShift = startedOnEarlierDay(shift?.work_date, todayLocal);
+  const onBreak = phase === "break";
+  // Breaks are possible while working, never while changing clothes or on lunch.
+  const showBreakButton = phase === "working" || onBreak;
+  const breakMinutesSoFar = status ? Math.floor(status.breakMs / 60_000) : 0;
+
   let lunchButtonText = "Start lunch";
   if (availability === "before") {
     lunchButtonText = `Lunch available from ${rules?.lunch_opens_local}`;
@@ -463,6 +516,14 @@ export default function ActiveShiftScreen() {
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Shift in Progress</Text>
         </View>
+
+        {isStaleShift && shift?.work_date && (
+          <View style={styles.staleBanner} accessibilityRole="alert">
+            <Text style={styles.staleBannerText}>
+              ⚠️ {strings.staleShiftWarning(strings.formatDate(shift.work_date))}
+            </Text>
+          </View>
+        )}
 
         {isChanging && (
           <View style={styles.changingIntro}>
@@ -515,6 +576,19 @@ export default function ActiveShiftScreen() {
               </Text>
               <Text style={styles.statusLabel}>Paid time resumes automatically</Text>
             </>
+          ) : phase === "break" ? (
+            <>
+              <Text style={styles.timeCardHeader}>
+                {strings.onBreakSince(label(shift?.open_break?.local_started, status.breakStartedAt))}
+              </Text>
+              <Text style={styles.timeCardElapsed}>
+                {formatCountdown(status.breakElapsedMs)}
+              </Text>
+              <Text style={styles.statusLabel}>⏸️ {strings.breakPaused}</Text>
+              <Text style={styles.pausedSubLabel}>
+                {strings.paidSoFar(formatDuration(status.workedMs))}
+              </Text>
+            </>
           ) : (
             <>
               <Text style={styles.timeCardHeader}>Paid time since {paidStartLabel}</Text>
@@ -531,7 +605,11 @@ export default function ActiveShiftScreen() {
           <View style={styles.earningsCard}>
             <Text style={styles.earningsTitle}>Earned so far (estimated)</Text>
             <Text style={styles.earningsAmount}>
-              {estimatedEarnings !== null ? `€${estimatedEarnings}` : "–"}
+              {isStaleShift
+                ? strings.noEstimate
+                : estimatedEarnings !== null
+                  ? `€${estimatedEarnings}`
+                  : "–"}
             </Text>
             <Text style={styles.rateSubtext}>
               Rate: €{hourlyRate} / hr · final amount is calculated when you finish
@@ -554,6 +632,9 @@ export default function ActiveShiftScreen() {
             Lunch taken ({shift?.lunch_minutes ?? "?"} min, until {lunchEndLabel})
           </Text>
         )}
+        {phase === "working" && breakMinutesSoFar > 0 && (
+          <Text style={styles.lunchDoneText}>{strings.breaksToday(breakMinutesSoFar)}</Text>
+        )}
 
         {/* Control Buttons */}
         <View style={styles.actionsContainer}>
@@ -564,6 +645,29 @@ export default function ActiveShiftScreen() {
               disabled={!canStartLunch}
             >
               <Text style={styles.lunchButtonText}>{lunchButtonText}</Text>
+            </TouchableOpacity>
+          )}
+
+          {showBreakButton && (
+            <TouchableOpacity
+              style={[
+                styles.breakButton,
+                onBreak && styles.resumeButton,
+                isBreakSubmitting && styles.disabledButton,
+              ]}
+              onPress={() => void handleToggleBreak()}
+              disabled={isBreakSubmitting}
+              accessibilityState={{ busy: isBreakSubmitting }}
+            >
+              <Text style={styles.breakButtonText}>
+                {isBreakSubmitting
+                  ? onBreak
+                    ? strings.resumingWork
+                    : strings.startingBreak
+                  : onBreak
+                    ? `▶️ ${strings.resumeWork}`
+                    : `☕ ${strings.takeBreak}`}
+              </Text>
             </TouchableOpacity>
           )}
 
@@ -604,6 +708,7 @@ type FinishedShift = {
   earned: number;
   lunchMinutes: number;
   lunchType: "recorded" | "elapsed" | "default" | "none";
+  breakMinutes: number;
   log: ShiftTimestamps;
 };
 
@@ -636,6 +741,7 @@ function FinishedSummary({
     ["Paid start", label(times.paid_start, at(log.paid_start_at))],
     ["Finished", label(times.finish, at(log.end_work_time))],
     ["Lunch", `${finished.lunchMinutes} min`],
+    [strings.breaksRow, strings.minutesShort(Math.round(finished.breakMinutes))],
     ["Paid hours", `${finished.workedHours.toFixed(2)} h`],
   ];
   return (
@@ -788,6 +894,26 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginBottom: 16,
   },
+  breakButton: {
+    backgroundColor: "#2563eb",
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    alignItems: "center",
+    elevation: 2,
+  },
+  resumeButton: { backgroundColor: "#059669" },
+  breakButtonText: { color: "#ffffff", fontSize: 16, fontWeight: "bold" },
+  pausedSubLabel: { color: "#d1d5db", fontSize: 13, marginTop: 4 },
+  staleBanner: {
+    backgroundColor: "#fef2f2",
+    borderWidth: 1,
+    borderColor: "#fca5a5",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 16,
+  },
+  staleBannerText: { color: "#991b1b", fontSize: 15, fontWeight: "600", lineHeight: 21 },
   finishButton: {
     backgroundColor: "#dc2626",
     paddingVertical: 16,

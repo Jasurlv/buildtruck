@@ -4,14 +4,29 @@ import { parseId, parseNumber, parseText } from "../validation.js";
 
 const router = Router();
 
-function parseBuilding(body: any) {
+// GPS can jump tens of metres indoors, so a smaller zone would flag workers who are on
+// site. Enforced here, not by a DB constraint: older rows below 50 m stay as they are
+// and must be raised when next edited.
+export const MIN_RADIUS_METERS = 50;
+export const MAX_RADIUS_METERS = 500;
+const RADIUS_ERROR = `The radius must be a whole number of meters from ${MIN_RADIUS_METERS} to ${MAX_RADIUS_METERS} (GPS can jump indoors).`;
+
+type BuildingInput = {
+  name: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  radius_meters: number;
+};
+
+function parseBuilding(body: any): BuildingInput | { error: string; code: string } {
   const name = parseText(body?.name, 255);
   const address = parseText(body?.address, 2000);
   const latitude = parseNumber(body?.latitude);
   const longitude = parseNumber(body?.longitude);
   const radius_meters =
     body?.radius_meters === undefined || body?.radius_meters === null
-      ? 30
+      ? MIN_RADIUS_METERS
       : parseNumber(body.radius_meters);
   if (
     !name ||
@@ -21,12 +36,16 @@ function parseBuilding(body: any) {
     latitude > 90 ||
     !Number.isFinite(longitude) ||
     longitude < -180 ||
-    longitude > 180 ||
-    !Number.isInteger(radius_meters) ||
-    radius_meters < 1 ||
-    radius_meters > 5000
+    longitude > 180
   ) {
-    return null;
+    return { error: "Name, address and valid coordinates are required.", code: "INVALID_BUILDING" };
+  }
+  if (
+    !Number.isInteger(radius_meters) ||
+    radius_meters < MIN_RADIUS_METERS ||
+    radius_meters > MAX_RADIUS_METERS
+  ) {
+    return { error: RADIUS_ERROR, code: "INVALID_RADIUS" };
   }
   return { name, address, latitude, longitude, radius_meters };
 }
@@ -51,11 +70,7 @@ router.get("/", async (req: Request, res: Response): Promise<any> => {
 // POST create building with uniqueness check
 router.post("/", async (req: Request, res: Response): Promise<any> => {
   const building = parseBuilding(req.body);
-  if (!building) {
-    return res.status(400).json({
-      error: "Name, address, valid coordinates and a radius of 1-5000 meters are required.",
-    });
-  }
+  if ("error" in building) return res.status(400).json(building);
   const { name, address, latitude, longitude, radius_meters } = building;
   try {
     const existing = await pool.query(
@@ -86,11 +101,7 @@ router.put("/:id", async (req: Request, res: Response): Promise<any> => {
     return res.status(404).json({ error: "Building not found" });
   }
   const building = parseBuilding(req.body);
-  if (!building) {
-    return res.status(400).json({
-      error: "Name, address, valid coordinates and a radius of 1-5000 meters are required.",
-    });
-  }
+  if ("error" in building) return res.status(400).json(building);
   const { name, address, latitude, longitude, radius_meters } = building;
   try {
     const existing = await pool.query(

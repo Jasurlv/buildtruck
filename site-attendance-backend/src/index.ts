@@ -20,6 +20,7 @@ import workerAuthRoutes from "./routes/workerAuth.js";
 import reportRoutes from "./routes/reports.js";
 import shiftRoutes from "./routes/shifts.js";
 import { requireRole } from "./middleware/auth.js";
+import { closeOverdueShifts } from "./shiftStore.js";
 
 // Fail fast on missing or invalid configuration instead of on the first request.
 getJwtSecret();
@@ -116,8 +117,30 @@ const onListen = (error?: Error) => {
 };
 const server = HOST ? app.listen(PORT, HOST, onListen) : app.listen(PORT, onListen);
 
+// Closes shifts left running past MAX_SHIFT_HOURS. Requests that read or start shifts
+// also check (lazily), so a missed tick is never visible; this keeps reports and the
+// database current when nobody is using the app. `new Date()` is the clock, so the
+// e2e fake clock (test/fakeClock.mjs) applies here too.
+const AUTO_CLOSE_INTERVAL_MS = 60_000;
+let autoCloseRunning = false;
+async function autoCloseTick(): Promise<void> {
+  if (autoCloseRunning) return; // a slow run must not overlap the next one
+  autoCloseRunning = true;
+  try {
+    const closed = await closeOverdueShifts(new Date());
+    if (closed > 0) console.log(`Auto-closed ${closed} shift(s) past the maximum length`);
+  } catch (error) {
+    console.error("Auto-close check failed:", error);
+  } finally {
+    autoCloseRunning = false;
+  }
+}
+void autoCloseTick();
+const autoCloseTimer = setInterval(() => void autoCloseTick(), AUTO_CLOSE_INTERVAL_MS);
+
 function shutdown(signal: string): void {
   console.log(`${signal} received, shutting down`);
+  clearInterval(autoCloseTimer);
   setTimeout(() => process.exit(1), 10_000).unref();
   server.close(() => {
     pool.end().finally(() => process.exit(0));

@@ -11,6 +11,21 @@ import { geocodeAddress } from "@/utils/geocode";
 const ADDRESS_SEARCH_DEBOUNCE_MS = 800;
 const ADDRESS_SEARCH_MIN_LENGTH = 4;
 
+// Same limits as the API. GPS can jump tens of meters indoors, so a smaller zone
+// would flag workers who are on site. Sites saved earlier with less must be raised.
+const MIN_RADIUS_METERS = 50;
+const MAX_RADIUS_METERS = 500;
+const RADIUS_HINT = `Allowed ${MIN_RADIUS_METERS}-${MAX_RADIUS_METERS} m (GPS can jump indoors)`;
+
+function radiusError(radius: number): string | null {
+  if (Number.isInteger(radius) && radius >= MIN_RADIUS_METERS && radius <= MAX_RADIUS_METERS) {
+    return null;
+  }
+  return Number.isInteger(radius) && radius > 0 && radius < MIN_RADIUS_METERS
+    ? `${radius} m is below the minimum. Raise it to at least ${MIN_RADIUS_METERS} m to save.`
+    : `Enter a whole number of meters from ${MIN_RADIUS_METERS} to ${MAX_RADIUS_METERS}.`;
+}
+
 interface BuildingModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -33,7 +48,7 @@ export default function BuildingModal({
     address: "",
     latitude: 56.9496,
     longitude: 24.1052,
-    radius_meters: 30,
+    radius_meters: MIN_RADIUS_METERS,
   });
 
   const mapRef = useRef<any>(null);
@@ -81,14 +96,14 @@ export default function BuildingModal({
           address: "",
           latitude: 56.9496,
           longitude: 24.1052,
-          radius_meters: 30,
+          radius_meters: MIN_RADIUS_METERS,
         });
       }
 
       const timer = setTimeout(async () => {
         const lat = buildingToEdit ? buildingToEdit.latitude : 56.9496;
         const lon = buildingToEdit ? buildingToEdit.longitude : 24.1052;
-        const rad = buildingToEdit ? buildingToEdit.radius_meters : 30;
+        const rad = buildingToEdit ? buildingToEdit.radius_meters : MIN_RADIUS_METERS;
 
         if (mapRef.current && !mapInstanceRef.current) {
           const L = (await import("leaflet")).default;
@@ -165,7 +180,7 @@ export default function BuildingModal({
   }, [buildingForm.latitude, buildingForm.longitude]);
 
   useEffect(() => {
-    if (circleRef.current) {
+    if (circleRef.current && Number.isFinite(buildingForm.radius_meters)) {
       circleRef.current.setRadius(buildingForm.radius_meters);
     }
   }, [buildingForm.radius_meters]);
@@ -207,8 +222,14 @@ export default function BuildingModal({
     }, ADDRESS_SEARCH_DEBOUNCE_MS);
   };
 
+  const currentRadiusError = radiusError(buildingForm.radius_meters);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (currentRadiusError) {
+      showNotification(currentRadiusError, "error");
+      return;
+    }
     try {
       const path = buildingToEdit
         ? `/buildings/${buildingToEdit.id}`
@@ -220,7 +241,11 @@ export default function BuildingModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildingForm),
       });
-      if (!res.ok) throw new Error("Failed to save building");
+      if (!res.ok) {
+        // The API explains what is wrong (e.g. the radius limits); show that.
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error || "Error saving building site");
+      }
 
       showNotification(
         buildingToEdit
@@ -231,7 +256,10 @@ export default function BuildingModal({
       onSuccess();
       handleClose();
     } catch (err) {
-      showNotification("Error saving building site", "error");
+      showNotification(
+        err instanceof Error && err.message ? err.message : "Error saving building site",
+        "error",
+      );
     }
   };
 
@@ -306,26 +334,66 @@ export default function BuildingModal({
               )}
             </div>
             <div>
-              <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
-                Geofence Radius:{" "}
-                <span className="text-indigo-600 font-bold">
-                  {buildingForm.radius_meters} meters
-                </span>
+              <label
+                htmlFor="building-radius"
+                className="block text-xs font-semibold text-gray-600 uppercase mb-1"
+              >
+                Geofence Radius (meters)
               </label>
-              <input
-                type="range"
-                min="10"
-                max="200"
-                step="5"
-                value={buildingForm.radius_meters}
-                onChange={(e) =>
-                  setBuildingForm({
-                    ...buildingForm,
-                    radius_meters: Number(e.target.value),
-                  })
-                }
-                className="w-full accent-indigo-600 cursor-pointer mt-2"
-              />
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  aria-label="Geofence radius"
+                  min={MIN_RADIUS_METERS}
+                  max={MAX_RADIUS_METERS}
+                  step="5"
+                  value={
+                    Number.isFinite(buildingForm.radius_meters)
+                      ? buildingForm.radius_meters
+                      : MIN_RADIUS_METERS
+                  }
+                  onChange={(e) =>
+                    setBuildingForm({
+                      ...buildingForm,
+                      radius_meters: Number(e.target.value),
+                    })
+                  }
+                  className="w-full accent-indigo-600 cursor-pointer"
+                />
+                <input
+                  id="building-radius"
+                  type="number"
+                  min={MIN_RADIUS_METERS}
+                  max={MAX_RADIUS_METERS}
+                  step="1"
+                  required
+                  value={
+                    Number.isFinite(buildingForm.radius_meters)
+                      ? buildingForm.radius_meters
+                      : ""
+                  }
+                  onChange={(e) =>
+                    setBuildingForm({
+                      ...buildingForm,
+                      // Empty while typing: NaN until a number is entered.
+                      radius_meters: e.target.value === "" ? NaN : Number(e.target.value),
+                    })
+                  }
+                  aria-invalid={currentRadiusError !== null}
+                  aria-describedby="building-radius-hint"
+                  className={`w-24 px-3 py-2 rounded-xl border text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                    currentRadiusError ? "border-rose-400" : "border-gray-200"
+                  }`}
+                />
+              </div>
+              <p id="building-radius-hint" className="mt-1 text-xs text-gray-500">
+                {RADIUS_HINT}
+              </p>
+              {currentRadiusError && (
+                <p role="alert" className="mt-1 text-xs text-rose-600">
+                  {currentRadiusError}
+                </p>
+              )}
             </div>
             <div className="flex justify-end gap-3 pt-4">
               <button

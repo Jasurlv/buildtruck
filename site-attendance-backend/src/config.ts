@@ -83,6 +83,7 @@ export type WorkRules = {
   lunchMaxMinutes: number;
   lunchDefaultDeductionMinutes: number;
   lunchAutoDeductMinShiftHours: number;
+  maxShiftHours: number;
 };
 
 function numberEnv(name: string, fallback: number, integer = true): number {
@@ -117,7 +118,13 @@ export function getWorkRules(): WorkRules {
     lunchMaxMinutes: numberEnv("LUNCH_MAX_MINUTES", 60),
     lunchDefaultDeductionMinutes: numberEnv("LUNCH_DEFAULT_DEDUCTION_MINUTES", 60),
     lunchAutoDeductMinShiftHours: numberEnv("LUNCH_AUTO_DEDUCT_MIN_SHIFT_HOURS", 5, false),
+    // A shift still running this long after paid start is closed by the server.
+    maxShiftHours: numberEnv("MAX_SHIFT_HOURS", 14, false),
   };
+  // Admin corrections allow at most 24 hours, so an auto-closed shift stays editable.
+  if (rules.maxShiftHours <= 0 || rules.maxShiftHours > 24) {
+    throw new Error("MAX_SHIFT_HOURS must be greater than 0 and at most 24");
+  }
   if (rules.lunchOpensAt > rules.lunchLatestStart) {
     throw new Error("LUNCH_OPENS_AT must not be later than LUNCH_LATEST_START");
   }

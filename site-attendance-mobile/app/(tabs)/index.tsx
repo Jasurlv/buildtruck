@@ -16,12 +16,52 @@ import { useRouter, useFocusEffect } from "expo-router";
 import MapView, { Marker, Circle } from "react-native-maps";
 import { SessionExpiredError, workerFetch } from "../../utils/api";
 import type { ShiftRules } from "../../utils/shiftTime";
+import { strings } from "../../constants/strings";
 import {
   getLocationPermission,
   openAppSettings,
   requestLocationPermission,
   type LocationPermissionState,
 } from "../../utils/locationPermission";
+
+type AutoClosedShift = { id: number; closed_after_hours?: number };
+
+// Shifts whose "closed automatically" notice is showing or was acknowledged in this
+// app session, so refocusing the tab does not stack a second alert.
+const autoCloseNoticesShown = new Set<number>();
+
+/**
+ * Shows the server's one-time notice for a shift it closed after the maximum length,
+ * and acknowledges it when the worker taps OK (so it is not shown again anywhere).
+ */
+function showAutoClosedNotice(data: {
+  last_shift_auto_closed?: boolean;
+  auto_closed_shift?: AutoClosedShift | null;
+  rules?: ShiftRules | null;
+}) {
+  const closed = data.auto_closed_shift;
+  if (!data.last_shift_auto_closed || !closed || autoCloseNoticesShown.has(closed.id)) return;
+  const hours = closed.closed_after_hours ?? data.rules?.max_shift_hours;
+  if (hours === undefined) return;
+  autoCloseNoticesShown.add(closed.id);
+  const acknowledge = async () => {
+    try {
+      const response = await workerFetch(`/attendance/auto-closed/${closed.id}/acknowledge`, {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch {
+      // Not recorded (e.g. offline): show it again next time the status loads.
+      autoCloseNoticesShown.delete(closed.id);
+    }
+  };
+  Alert.alert(
+    strings.autoClosedTitle,
+    strings.autoClosedMessage(hours),
+    [{ text: strings.ok, onPress: () => void acknowledge() }],
+    { cancelable: false },
+  );
+}
 
 export default function AttendanceScreen() {
   const [worker, setWorker] = useState<any>(null);
@@ -95,6 +135,7 @@ export default function AttendanceScreen() {
       setActiveShift(data.activeShift ?? null);
       setSchedule(data.schedule ?? null);
       setRules(data.rules ?? null);
+      showAutoClosedNotice(data);
 
       await startLocationTracking(workerParsed, isFocused, true);
     } catch (err) {

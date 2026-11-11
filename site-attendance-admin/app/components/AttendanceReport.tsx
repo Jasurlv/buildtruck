@@ -39,7 +39,13 @@ type Shift = {
   lateness_minutes: number | null;
   lunch_minutes: number | null;
   lunch_deducted_minutes: number | string | null;
+  // Break time deducted; null while the shift is running.
+  break_minutes: number | string | null;
+  // The server ended the shift after the maximum shift length.
+  auto_closed: boolean;
 };
+
+const COLUMN_COUNT = 14;
 
 type ReportPage = {
   rows: Shift[];
@@ -79,6 +85,24 @@ function effectiveSearch(input: string): string {
 function lunchMinutesOf(shift: Shift): number | null {
   const minutes = shift.lunch_deducted_minutes ?? shift.lunch_minutes;
   return minutes === null ? null : Number(minutes);
+}
+
+/** Break minutes as a number (they can be fractional), or null while running. */
+function breakMinutesOf(shift: Shift): number | null {
+  return shift.break_minutes === null || shift.break_minutes === undefined
+    ? null
+    : Number(shift.break_minutes);
+}
+
+function AutoClosedBadge() {
+  return (
+    <span
+      title="The server closed this shift after the maximum shift length. Review and correct it if needed."
+      className="ml-2 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800"
+    >
+      Auto-closed
+    </span>
+  );
 }
 
 function csvCell(value: unknown): string {
@@ -223,7 +247,9 @@ export default function AttendanceReport({ token }: { token: string }) {
           `Lunch started (${APP_TIMEZONE})`,
           `Lunch ended (${APP_TIMEZONE})`,
           "Lunch minutes",
+          "Break (min)",
           `Work finished (${APP_TIMEZONE})`,
+          "Auto-closed",
           "Worked hours",
           "Earned",
         ],
@@ -239,7 +265,9 @@ export default function AttendanceReport({ token }: { token: string }) {
           formatAppDateTime(shift.lunch_start_time),
           formatAppDateTime(shift.lunch_end_time),
           lunchMinutesOf(shift),
+          breakMinutesOf(shift),
           formatAppDateTime(shift.end_work_time),
+          shift.auto_closed ? "Yes" : "No",
           Number(shift.total_worked_hours || 0).toFixed(2),
           Number(shift.daily_earned || 0).toFixed(2),
         ]),
@@ -358,7 +386,7 @@ export default function AttendanceReport({ token }: { token: string }) {
         aria-busy={loading}
         className={`overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm transition-opacity ${loading && data ? "opacity-60" : ""}`}
       >
-        <table className="min-w-[1500px] w-full text-left text-sm">
+        <table className="min-w-[1640px] w-full text-left text-sm">
           <thead className="bg-gray-50 text-xs uppercase text-gray-500">
             <tr>
               {[
@@ -372,6 +400,7 @@ export default function AttendanceReport({ token }: { token: string }) {
                 "Lunch start",
                 "Lunch end",
                 "Lunch (min)",
+                "Break (min)",
                 "Finished",
                 "Hours",
                 "Earned",
@@ -398,7 +427,11 @@ export default function AttendanceReport({ token }: { token: string }) {
                 <td className="px-4 py-3">{formatAppDateTime(shift.lunch_start_time)}</td>
                 <td className="px-4 py-3">{formatAppDateTime(shift.lunch_end_time)}</td>
                 <td className="px-4 py-3 tabular-nums">{lunchMinutesOf(shift) ?? "—"}</td>
-                <td className="px-4 py-3">{formatAppDateTime(shift.end_work_time)}</td>
+                <td className="px-4 py-3 tabular-nums">{breakMinutesOf(shift) ?? "—"}</td>
+                <td className="whitespace-nowrap px-4 py-3">
+                  {formatAppDateTime(shift.end_work_time)}
+                  {shift.auto_closed && <AutoClosedBadge />}
+                </td>
                 <td className="px-4 py-3">
                   {Number(shift.total_worked_hours || 0).toFixed(2)}
                 </td>
@@ -409,14 +442,14 @@ export default function AttendanceReport({ token }: { token: string }) {
             ))}
             {!data && (
               <tr>
-                <td colSpan={13} className="px-4 py-12 text-center text-gray-500">
+                <td colSpan={COLUMN_COUNT} className="px-4 py-12 text-center text-gray-500">
                   {loading ? "Loading report..." : "The report could not be loaded."}
                 </td>
               </tr>
             )}
             {data && data.rows.length === 0 && (
               <tr>
-                <td colSpan={13} className="px-4 py-12 text-center text-gray-500">
+                <td colSpan={COLUMN_COUNT} className="px-4 py-12 text-center text-gray-500">
                   {search
                     ? "No shifts match your search"
                     : "No attendance records in this date range."}

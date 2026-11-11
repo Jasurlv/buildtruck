@@ -60,14 +60,37 @@ const admin = login.data.token;
 
 check("buildings requires auth", (await call("GET", "/buildings")).status === 401);
 check("building invalid 400", (await call("POST", "/buildings", { token: admin, body: { name: "", address: "x" } })).status === 400);
-const b = await call("POST", "/buildings", { token: admin, body: { name: `E2E Site ${run}`, address: "Riga", latitude: 56.9496, longitude: 24.1052, radius_meters: 30 } });
+const b = await call("POST", "/buildings", { token: admin, body: { name: `E2E Site ${run}`, address: "Riga", latitude: 56.9496, longitude: 24.1052, radius_meters: 50 } });
 check("building create", b.status === 200 && b.data.id, JSON.stringify(b.data));
 const bid = b.data.id;
 // The admin UI sends NUMERIC values back as strings when editing.
-check("building update w/ string coords", (await call("PUT", `/buildings/${bid}`, { token: admin, body: { ...b.data, radius_meters: 50 } })).status === 200);
+check("building update w/ string coords", (await call("PUT", `/buildings/${bid}`, { token: admin, body: { ...b.data, radius_meters: 60 } })).status === 200);
 check("building PUT bad id 404", (await call("PUT", "/buildings/abc", { token: admin, body: b.data })).status === 404);
 check("building PUT missing 404", (await call("PUT", "/buildings/2147483647", { token: admin, body: { ...b.data, name: `Other ${run}` } })).status === 404);
 check("building DELETE missing 404", (await call("DELETE", "/buildings/2147483647", { token: admin })).status === 404);
+
+// Radius: whole meters from 50 to 500, on create and update.
+const radiusSite = (radius_meters, label) =>
+  call("POST", "/buildings", { token: admin, body: { name: `Radius ${label} ${run}`, address: "Riga", latitude: 56.95, longitude: 24.1, radius_meters } });
+for (const [radius, ok] of [[49, false], [50, true], [500, true], [501, false], [75.5, false], ["abc", false]]) {
+  const r = await radiusSite(radius, String(radius));
+  check(`building radius ${JSON.stringify(radius)} -> ${ok ? "accepted" : "400 INVALID_RADIUS"}`,
+    ok ? r.status === 200 && r.data.radius_meters === radius
+       : r.status === 400 && r.data?.code === "INVALID_RADIUS" && r.data.error.includes("50") && r.data.error.includes("500"),
+    `${r.status} ${r.data?.error ?? ""}`);
+}
+check("update with radius 49 -> 400 INVALID_RADIUS", (await call("PUT", `/buildings/${bid}`, { token: admin, body: { ...b.data, radius_meters: 49 } })).data?.code === "INVALID_RADIUS");
+check("update with radius 501 -> 400 INVALID_RADIUS", (await call("PUT", `/buildings/${bid}`, { token: admin, body: { ...b.data, radius_meters: 501 } })).data?.code === "INVALID_RADIUS");
+// A site saved before the limit (35 m) keeps its value until edited, then must be raised.
+const legacyDb = new pg.Client({ connectionString: process.env.DATABASE_URL });
+await legacyDb.connect();
+const legacySite = (await legacyDb.query(
+  `INSERT INTO buildings (name, address, latitude, longitude, radius_meters) VALUES ($1, 'Riga', 56.95, 24.1, 35) RETURNING *`,
+  [`Legacy 35m ${run}`])).rows[0];
+await legacyDb.end();
+check("legacy 35 m site is listed unchanged", (await call("GET", "/buildings", { token: admin })).data?.find((x) => x.id === legacySite.id)?.radius_meters === 35);
+check("editing it with 35 m -> 400 INVALID_RADIUS", (await call("PUT", `/buildings/${legacySite.id}`, { token: admin, body: { ...legacySite, name: `Legacy 35m ${run}` } })).data?.code === "INVALID_RADIUS");
+check("editing it with 50 m is accepted", (await call("PUT", `/buildings/${legacySite.id}`, { token: admin, body: { ...legacySite, radius_meters: 50 } })).data?.radius_meters === 50);
 
 const w1 = `w1-${run}`;
 check("worker no password 400", (await call("POST", "/workers", { token: admin, body: { full_name: "W", username: w1, hourly_rate: 7 } })).status === 400);
@@ -112,8 +135,8 @@ console.log("== Report pagination, search and export");
 // API-made shifts last seconds (0 hours), so seed completed shifts with known hours
 // directly, in January 2020 to stay clear of the rows above. Every name contains the
 // run id, so counts stay exact even if the database is reused.
-const siteA = (await call("POST", "/buildings", { token: admin, body: { name: `Alpha ${run}`, address: "Riga", latitude: 56.95, longitude: 24.1, radius_meters: 30 } })).data;
-const siteB = (await call("POST", "/buildings", { token: admin, body: { name: `Beta ${run}_%`, address: "Riga", latitude: 56.96, longitude: 24.1, radius_meters: 30 } })).data;
+const siteA = (await call("POST", "/buildings", { token: admin, body: { name: `Alpha ${run}`, address: "Riga", latitude: 56.95, longitude: 24.1, radius_meters: 50 } })).data;
+const siteB = (await call("POST", "/buildings", { token: admin, body: { name: `Beta ${run}_%`, address: "Riga", latitude: 56.96, longitude: 24.1, radius_meters: 50 } })).data;
 const newWorker = async (full_name, username, building) =>
   (await call("POST", "/workers", { token: admin, body: { full_name, username, password: "pw1234", hourly_rate: 10, assigned_building_id: building.id } })).data;
 const wa = await newWorker(`Pagina Tester ${run}`, `pag-a-${run}`, siteA);
@@ -359,6 +382,100 @@ check("lunch of 35 min accepted", (await lunchAt(riga("25", "12:30"), 35)).statu
 done = await finishAt(riga("25", "17:00"));
 check("35 min lunch deducted (08:00-17:00 less 35 = 8.42 h)", done.data?.summary?.worked_hours === 8.42 && done.data.summary.lunch_deducted_minutes === 35 && done.data.summary.lunch_deduction_type === "recorded", JSON.stringify(done.data?.summary));
 
+console.log("-- breaks");
+const breakAt = async (iso, action) => {
+  await setClock(iso);
+  return call("POST", `/attendance/break/${action}`, { token: payToken });
+};
+const activeAt = async (iso) => {
+  await setClock(iso);
+  return call("GET", "/attendance/active", { token: payToken });
+};
+const pausesDb = new pg.Client({ connectionString: process.env.DATABASE_URL });
+await pausesDb.connect();
+const pausesOf = async (shiftId) =>
+  (await pausesDb.query("SELECT * FROM shift_pauses WHERE shift_id = $1 ORDER BY id", [shiftId])).rows;
+const shiftRow = async (shiftId) =>
+  (await pausesDb.query("SELECT * FROM attendance_logs WHERE id = $1", [shiftId])).rows[0];
+
+check("break with no active shift -> 404 NO_ACTIVE_SHIFT", hasCode(await breakAt(riga("26", "07:00"), "start"), 404, "NO_ACTIVE_SHIFT") && hasCode(await breakAt(riga("26", "07:00"), "end"), 404, "NO_ACTIVE_SHIFT"));
+// Thu 26 Jun: paid from 08:00.
+const breakShiftId = (await punchAt(riga("26", "07:45"))).data.log.id;
+check("break before paid start -> BEFORE_PAID_START", hasCode(await breakAt(riga("26", "07:55"), "start"), 409, "BEFORE_PAID_START"));
+check("end break with none open -> NO_OPEN_BREAK", hasCode(await breakAt(riga("26", "08:30"), "end"), 409, "NO_OPEN_BREAK"));
+await setClock(riga("26", "10:00"));
+const breakRace = await Promise.all(Array.from({ length: 6 }, () => call("POST", "/attendance/break/start", { token: payToken })));
+check("concurrent break start: exactly one succeeds, others BREAK_ALREADY_OPEN",
+  breakRace.filter((r) => r.status === 200).length === 1 && breakRace.filter((r) => hasCode(r, 409, "BREAK_ALREADY_OPEN")).length === 5,
+  breakRace.map((r) => r.status).join(","));
+check("concurrent break start created one pause", (await pausesOf(breakShiftId)).length === 1);
+const started = breakRace.find((r) => r.status === 200);
+check("break start response: open break, 0 min so far, server_now", sameInstant(started?.data?.log?.open_break?.started_at, riga("26", "10:00")) && started.data.log.break_minutes === 0 && sameInstant(started.data.server_now, riga("26", "10:00")));
+const onBreak = await activeAt(riga("26", "10:10"));
+check("status shows the open break and minutes so far", sameInstant(onBreak.data?.activeShift?.open_break?.started_at, riga("26", "10:00")) && onBreak.data.activeShift.open_break.local_started === "10:00" && onBreak.data.activeShift.break_minutes === 10 && sameInstant(onBreak.data.server_now, riga("26", "10:10")), JSON.stringify(onBreak.data?.activeShift?.open_break));
+check("second break while one is open -> BREAK_ALREADY_OPEN", hasCode(await breakAt(riga("26", "10:12"), "start"), 409, "BREAK_ALREADY_OPEN"));
+const ended = await breakAt(riga("26", "10:15"), "end");
+check("break end: closed, 15 min", ended.status === 200 && ended.data.log.open_break === null && ended.data.log.break_minutes === 15 && sameInstant(ended.data.log.breaks?.[0]?.ended_at, riga("26", "10:15")));
+check("ending it twice -> NO_OPEN_BREAK", hasCode(await breakAt(riga("26", "10:15"), "end"), 409, "NO_OPEN_BREAK"));
+check("second break of the day accepted", (await breakAt(riga("26", "12:00"), "start")).status === 200);
+check("lunch during a break -> BREAK_ACTIVE", hasCode(await lunchAt(riga("26", "12:05"), 30), 409, "BREAK_ACTIVE"));
+await breakAt(riga("26", "12:10"), "end");
+check("lunch after the break accepted", (await lunchAt(riga("26", "12:10"), 30)).status === 200);
+check("break during lunch -> LUNCH_ACTIVE", hasCode(await breakAt(riga("26", "12:20"), "start"), 409, "LUNCH_ACTIVE"));
+check("break right when lunch ends accepted", (await breakAt(riga("26", "12:40"), "start")).status === 200);
+await breakAt(riga("26", "12:45"), "end");
+done = await finishAt(riga("26", "17:00"));
+check("breaks deducted (08:00-17:00 less 30 lunch, 30 breaks = 8.00 h)", done.data?.summary?.worked_hours === 8 && done.data.summary.earned_today === 80 && done.data.summary.break_minutes === 30 && done.data.summary.lunch_deducted_minutes === 30, JSON.stringify(done.data?.summary));
+check("break_minutes stored on the shift", Number((await shiftRow(breakShiftId)).break_minutes) === 30);
+
+// Fri 27 Jun: finishing while on a break ends the break at the finish.
+const openBreakShiftId = (await punchAt(riga("27", "07:45"))).data.log.id;
+await breakAt(riga("27", "15:00"), "start");
+done = await finishAt(riga("27", "16:00"));
+check("finish while on break (08:00-16:00 less 60 default lunch, 60 break = 6.00 h)", done.data?.summary?.worked_hours === 6 && done.data.summary.break_minutes === 60 && done.data.summary.lunch_deduction_type === "default", JSON.stringify(done.data?.summary));
+const closedBreak = await pausesOf(openBreakShiftId);
+check("the break ended at the finish", closedBreak.length === 1 && sameInstant(closedBreak[0].ended_at, riga("27", "16:00")) && done.data.log.open_break === null);
+check("break after finishing -> NO_ACTIVE_SHIFT", hasCode(await breakAt(riga("27", "16:05"), "start"), 404, "NO_ACTIVE_SHIFT"));
+
+console.log("-- auto-close after MAX_SHIFT_HOURS (14)");
+// Sat 28 Jun: paid from 08:00, 30 min lunch, a break from 15:00 never ended.
+const longShiftId = (await punchAt(riga("28", "07:45"))).data.log.id;
+await lunchAt(riga("28", "12:00"), 30);
+await breakAt(riga("28", "15:00"), "start");
+const almost = await activeAt(riga("28", "21:59:59"));
+check("13h59m59s after paid start: still running", almost.data?.activeShift?.id === longShiftId && almost.data.last_shift_auto_closed === false && almost.data.rules?.max_shift_hours === 14);
+check("13h59m59s: shift not closed in the database", (await shiftRow(longShiftId)).end_work_time === null);
+await setClock(riga("28", "22:00"));
+// Several lazy checks at once (and possibly the timer): the shift is closed exactly once.
+const closers = await Promise.all(Array.from({ length: 5 }, () => call("GET", "/attendance/active", { token: payToken })));
+check("at exactly 14 h: closed (every concurrent read agrees)", closers.every((r) => r.status === 200 && r.data.activeShift === null && r.data.last_shift_auto_closed === true && r.data.auto_closed_shift?.id === longShiftId), closers.map((r) => `${r.status}:${r.data?.auto_closed_shift?.id}`).join(","));
+let longRow = await shiftRow(longShiftId);
+check("finish = paid start + 14 h, auto_closed set", sameInstant(longRow.end_work_time, riga("28", "22:00")) && longRow.auto_closed === true && longRow.status === "Completed");
+check("normal deductions: 14 h less 30 lunch, 7 h open break = 6.50 h", Number(longRow.total_worked_hours) === 6.5 && Number(longRow.daily_earned) === 65 && Number(longRow.lunch_deducted_minutes) === 30 && Number(longRow.break_minutes) === 420, JSON.stringify({ h: longRow.total_worked_hours, b: longRow.break_minutes }));
+const longPauses = await pausesOf(longShiftId);
+check("the open break ended at the auto-close time", longPauses.length === 1 && sameInstant(longPauses[0].ended_at, riga("28", "22:00")));
+check("notice: closed after 14 h", closers[0].data.auto_closed_shift.closed_after_hours === 14 && closers[0].data.auto_closed_shift.local_times?.finish === "22:00");
+const later = await activeAt(riga("28", "23:30"));
+longRow = await shiftRow(longShiftId);
+check("idempotent: a later check changes nothing", later.data?.auto_closed_shift?.id === longShiftId && sameInstant(longRow.end_work_time, riga("28", "22:00")) && Number(longRow.total_worked_hours) === 6.5);
+check("finish after auto-close -> 404 NO_ACTIVE_SHIFT", hasCode(await finishAt(riga("28", "23:31")), 404, "NO_ACTIVE_SHIFT"));
+check("another worker cannot acknowledge it", hasCode(await call("POST", `/attendance/auto-closed/${longShiftId}/acknowledge`, { token: worker }), 404, "SHIFT_NOT_FOUND"));
+const ack = await call("POST", `/attendance/auto-closed/${longShiftId}/acknowledge`, { token: payToken });
+check("worker acknowledges the notice", ack.status === 200 && ack.data.acknowledged === true);
+const afterAck = await activeAt(riga("28", "23:32"));
+check("notice not shown again", afterAck.data?.last_shift_auto_closed === false && afterAck.data.auto_closed_shift === null);
+check("acknowledging twice is fine", (await call("POST", `/attendance/auto-closed/${longShiftId}/acknowledge`, { token: payToken })).status === 200);
+
+// Sun 29 Jun: no lunch and the worker punches in again 14.5 h later. The punch-in
+// closes the old shift first (14 h less the default 60 min lunch = 13 h).
+const forgotten = (await punchAt(riga("29", "07:45"))).data.log.id;
+const nextPunch = await punchAt(riga("29", "22:30"));
+check("punch-in closes an overdue shift and starts a new one", nextPunch.status === 201 && nextPunch.data.log.id !== forgotten, JSON.stringify(nextPunch.data?.error ?? ""));
+const forgottenRow = await shiftRow(forgotten);
+check("default lunch rule applies: 14 h less 60 = 13.00 h, auto_closed", Number(forgottenRow.total_worked_hours) === 13 && Number(forgottenRow.lunch_deducted_minutes) === 60 && forgottenRow.auto_closed === true && sameInstant(forgottenRow.end_work_time, riga("29", "22:00")));
+check("notice is only for the latest shift (now the new one)", (await activeAt(riga("29", "22:31"))).data?.last_shift_auto_closed === false);
+await finishAt(riga("29", "22:40"));
+
 console.log("-- admin correction");
 const patchShift = (id, body, token = admin) => call("PATCH", `/shifts/${id}`, { token, body });
 const auditOf = async (id) => (await call("GET", `/shifts/${id}/adjustments`, { token: admin })).data?.adjustments;
@@ -392,6 +509,13 @@ const noLunch = await patchShift(recordedShiftId, { reason: "Worked through lunc
 check("lunch_minutes 0 removes the deduction", Number(noLunch.data?.shift?.total_worked_hours) === 10 && Number(noLunch.data.shift.lunch_deducted_minutes) === 0);
 const exact = await patchShift(elapsedShiftId, { reason: "Lunch was 30 minutes", lunch_minutes: 30 });
 check("admin's lunch figure is deducted exactly on a finish-during-lunch shift", Number(exact.data?.shift?.lunch_deducted_minutes) === 30 && Number(exact.data.shift.total_worked_hours) === 3.83, JSON.stringify(exact.data?.shift?.lunch_deducted_minutes));
+const earlier = await patchShift(breakShiftId, { reason: "Left at 16:00", finish_at: riga("26", "16:00") });
+check("correction keeps deducting breaks (08:00-16:00 less 30 lunch, 30 breaks = 7 h)", Number(earlier.data?.shift?.total_worked_hours) === 7 && Number(earlier.data.shift.break_minutes) === 30, JSON.stringify(earlier.data?.shift?.total_worked_hours));
+const clipped = await patchShift(openBreakShiftId, { reason: "Left at 15:30", finish_at: riga("27", "15:30") });
+check("a break past the corrected finish is cut at it (7.5 h less 60 lunch, 30 break = 6 h)", Number(clipped.data?.shift?.total_worked_hours) === 6 && Number(clipped.data.shift.break_minutes) === 30, JSON.stringify(clipped.data?.shift?.break_minutes));
+const autoFixed = await patchShift(longShiftId, { reason: "Left at 17:00", finish_at: riga("28", "17:00") });
+check("an auto-closed shift can be corrected and stays marked", Number(autoFixed.data?.shift?.total_worked_hours) === 6.5 && autoFixed.data.shift.auto_closed === true && Number(autoFixed.data.shift.break_minutes) === 120, JSON.stringify({ h: autoFixed.data?.shift?.total_worked_hours, b: autoFixed.data?.shift?.break_minutes }));
+check("audit records break minutes", (await auditOf(breakShiftId))[0]?.old_values?.break_minutes === 30);
 
 const forgot = await punchAt(riga("23", "07:45"));
 await setClock(riga("23", "20:00"));
@@ -399,6 +523,13 @@ check("running shift needs finish_at -> SHIFT_STILL_ACTIVE", hasCode(await patch
 const closed = await patchShift(forgot.data.log.id, { reason: "Forgot to finish", finish_at: riga("23", "17:00") });
 check("finish_at ends a forgotten shift (no lunch: 60 deducted, 8 h)", closed.status === 200 && closed.data.shift.status === "Completed" && Number(closed.data.shift.total_worked_hours) === 8 && Number(closed.data.shift.daily_earned) === 80);
 check("worker can start a new shift afterwards", (await call("GET", "/attendance/active", { token: payToken })).data?.activeShift === null);
+// Sun 22 Jun: the admin ends a forgotten shift whose break was still open.
+const openAtEnd = (await punchAt(riga("22", "07:45"))).data.log.id;
+await breakAt(riga("22", "15:00"), "start");
+await setClock(riga("22", "20:00"));
+const endedByAdmin = await patchShift(openAtEnd, { reason: "Forgot to finish", finish_at: riga("22", "17:00") });
+check("admin finish ends the open break (9 h less 60 lunch, 120 break = 6 h)", Number(endedByAdmin.data?.shift?.total_worked_hours) === 6 && Number(endedByAdmin.data.shift.break_minutes) === 120);
+check("the open break ended at the admin's finish", sameInstant((await pausesOf(openAtEnd))[0]?.ended_at, riga("22", "17:00")));
 
 console.log("-- reports");
 const juneRows = async (extra = {}) => {
@@ -414,9 +545,13 @@ for (const [label, rows] of [["legacy", legacyJune.data?.shifts], ["paged", late
   check(`${label} report row: arrival, paid start, waiting, lateness`, row && sameInstant(row.arrival_at, riga("04", "07:50")) && sameInstant(row.paid_start_at, riga("04", "08:05")) && row.waiting_minutes === 15 && row.lateness_minutes === 5, JSON.stringify(row && { w: row.waiting_minutes, l: row.lateness_minutes }));
   const lunchRow = dayRow(rows, "2025-06-13");
   check(`${label} report row: lunch minutes and hours`, lunchRow && lunchRow.lunch_minutes === 30 && Number(lunchRow.lunch_deducted_minutes) === 30 && Number(lunchRow.total_worked_hours) === 3.83);
+  check(`${label} report row: break minutes, not auto-closed`, lunchRow && Number(lunchRow.break_minutes) === 0 && lunchRow.auto_closed === false && Number(dayRow(rows, "2025-06-26")?.break_minutes) === 30);
+  const autoRow = dayRow(rows, "2025-06-28");
+  check(`${label} report row: auto-closed marker`, autoRow?.auto_closed === true && Number(autoRow.break_minutes) === 120);
 }
 const oldRow = (await report({ search: `pag-a-${run}`, page: "1" })).data?.rows?.[0];
-check("rows inserted without the new columns still report (lateness unknown)", oldRow && oldRow.lateness_minutes === null && oldRow.waiting_minutes === null);
+check("rows inserted without the new columns still report (lateness unknown)", oldRow && oldRow.lateness_minutes === null && oldRow.waiting_minutes === null && oldRow.auto_closed === false);
+await pausesDb.end();
 await releaseClock();
 
 console.log("== Errors and CORS");
