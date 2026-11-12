@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useTranslation } from "react-i18next";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { minutesText } from "../i18n/format";
 
 type LunchModalProps = {
@@ -30,10 +31,18 @@ export default function LunchModal({
 }: LunchModalProps) {
   const [minutes, setMinutes] = useState(defaultMinutes);
   const { t } = useTranslation();
+  // A full-screen modal can draw under the system bars; keep the sheet (and its
+  // bottom buttons) clear of them. Insets are 0 where there is nothing to avoid.
+  const insets = useSafeAreaInsets();
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.backdrop}>
+      <View
+        style={[
+          styles.backdrop,
+          { paddingTop: 20 + insets.top, paddingBottom: 20 + insets.bottom },
+        ]}
+      >
         {/* Tapping the dimmed area closes it; it sits behind the sheet, so taps
             inside the sheet never reach it. */}
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel={t("common.close")} />

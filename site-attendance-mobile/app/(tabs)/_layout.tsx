@@ -8,16 +8,21 @@ import {
   Dimensions,
 } from "react-native";
 import { Tabs, useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SymbolView } from "expo-symbols";
 import { useTranslation } from "react-i18next";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const TAB_COUNT = 3;
 const TAB_WIDTH = SCREEN_WIDTH / TAB_COUNT;
+const TAB_BAR_HEIGHT = 65;
 
 function CustomTabBar({ state }: any) {
   const router = useRouter();
   const { t } = useTranslation();
+  // The bar grows by the bottom inset (gesture bar / Back-Home-Recents), so the
+  // 65 px buttons sit above it. The inset is 0 on phones without one.
+  const insets = useSafeAreaInsets();
   const translateX = useRef(
     new Animated.Value(state.index * TAB_WIDTH),
   ).current;
@@ -32,7 +37,12 @@ function CustomTabBar({ state }: any) {
   }, [state.index]);
 
   return (
-    <View style={styles.tabContainer}>
+    <View
+      style={[
+        styles.tabContainer,
+        { height: TAB_BAR_HEIGHT + insets.bottom, paddingBottom: insets.bottom },
+      ]}
+    >
       {/* Sliding Active Indicator Background matching Punch-In button color (#4f46e5) */}
       <Animated.View
         style={[
@@ -113,7 +123,6 @@ export default function TabLayout() {
 const styles = StyleSheet.create({
   tabContainer: {
     flexDirection: "row",
-    height: 65,
     backgroundColor: "#f9fafb", // Matches app background color exactly
     borderTopWidth: 1,
     borderTopColor: "#E5E7EB",
@@ -127,7 +136,7 @@ const styles = StyleSheet.create({
   indicator: {
     position: "absolute",
     top: 0,
-    bottom: 0,
+    height: TAB_BAR_HEIGHT,
     width: TAB_WIDTH,
     backgroundColor: "#4f46e5", // Matches the Punch-In button background color
   },

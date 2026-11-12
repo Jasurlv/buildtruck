@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import {
   StyleSheet,
   Text,
@@ -7,13 +7,12 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
-  SafeAreaView,
   ScrollView,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import * as Location from "expo-location";
 import * as SecureStore from "expo-secure-store";
 import { useRouter, useFocusEffect } from "expo-router";
-import MapView, { Marker, Circle } from "react-native-maps";
 import { useTranslation } from "react-i18next";
 import i18n from "../../i18n";
 import { hoursText } from "../../i18n/format";
@@ -87,12 +86,21 @@ export default function AttendanceScreen() {
   const locationPermissionRef = useRef<LocationPermissionState | null>(null);
   const workerRef = useRef<any>(null);
 
-  const mapRef = useRef<MapView>(null);
   const locationSubscription = useRef<Location.LocationSubscription | null>(
     null,
   );
   const router = useRouter();
   const { t } = useTranslation();
+  // Set when no GPS fix has arrived for a while, to show a hint.
+  const [gpsSlow, setGpsSlow] = useState(false);
+  const waitingForGps = locationPermission === "granted" && currentLocation === null;
+
+  useEffect(() => {
+    setGpsSlow(false);
+    if (!waitingForGps) return;
+    const timer = setTimeout(() => setGpsSlow(true), 20_000);
+    return () => clearTimeout(timer);
+  }, [waitingForGps]);
 
   // useFocusEffect runs every time you navigate back to the Today tab
   useFocusEffect(
@@ -174,41 +182,44 @@ export default function AttendanceScreen() {
     updateLocationPermission(permission.state);
     if (permission.state !== "granted" || locationSubscription.current) return;
 
+    const handleLocation = (location: Location.LocationObject) => {
+      if (!isFocused()) return;
+      const { latitude, longitude } = location.coords;
+      setCurrentLocation({ latitude, longitude });
+
+      if (workerData && workerData.latitude && workerData.longitude) {
+        const siteLat = parseFloat(workerData.latitude);
+        const siteLng = parseFloat(workerData.longitude);
+
+        const dist = calculateDistance(latitude, longitude, siteLat, siteLng);
+        setDistance(Math.round(dist));
+
+        const allowedRadius = (workerData.radius_meters || 30) + 70;
+        const inside = dist <= allowedRadius;
+        setIsInsideGeofence(inside);
+      }
+    };
+
+    // Show a distance at once from the phone's last known position, while the
+    // watch below waits for a fresh fix. Only a recent, reasonably accurate one:
+    // Start Work sends this position, so an old one from elsewhere must not count.
+    try {
+      const lastKnown = await Location.getLastKnownPositionAsync({
+        maxAge: 60_000,
+        requiredAccuracy: 100,
+      });
+      if (lastKnown) handleLocation(lastKnown);
+    } catch {
+      // No cached position: wait for the watch.
+    }
+    if (!isFocused() || locationSubscription.current) return;
+
     const subscription = await Location.watchPositionAsync(
       {
         accuracy: Location.Accuracy.High,
         distanceInterval: 3,
       },
-      (location) => {
-        if (!isFocused()) return;
-        const { latitude, longitude } = location.coords;
-        setCurrentLocation({ latitude, longitude });
-
-        if (workerData && workerData.latitude && workerData.longitude) {
-          const siteLat = parseFloat(workerData.latitude);
-          const siteLng = parseFloat(workerData.longitude);
-
-          const dist = calculateDistance(latitude, longitude, siteLat, siteLng);
-          setDistance(Math.round(dist));
-
-          const allowedRadius = (workerData.radius_meters || 30) + 70;
-          const inside = dist <= allowedRadius;
-          setIsInsideGeofence(inside);
-
-          if (mapRef.current) {
-            mapRef.current.fitToCoordinates(
-              [
-                { latitude, longitude },
-                { latitude: siteLat, longitude: siteLng },
-              ],
-              {
-                edgePadding: { top: 60, right: 60, bottom: 60, left: 60 },
-                animated: true,
-              },
-            );
-          }
-        }
-      },
+      handleLocation,
     );
 
     if (isFocused()) {
@@ -330,14 +341,11 @@ export default function AttendanceScreen() {
     );
   }
 
-  const siteLat = parseFloat(worker?.latitude || "0");
-  const siteLng = parseFloat(worker?.longitude || "0");
-  const siteRadius = (worker?.radius_meters || 30) + 70;
   const locationMissing =
     locationPermission !== null && locationPermission !== "granted";
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={["top", "left", "right"]}>
       <ScrollView
         contentContainerStyle={styles.scrollContainer}
         showsVerticalScrollIndicator={false}
@@ -430,24 +438,9 @@ export default function AttendanceScreen() {
           </Text>
         </View>
 
-        {/* Live Location Map */}
-        <View style={styles.mapContainer}>
-          {currentLocation && siteLat !== 0 ? (
-            <MapView ref={mapRef} style={styles.map} showsUserLocation>
-              <Circle
-                center={{ latitude: siteLat, longitude: siteLng }}
-                radius={siteRadius}
-                fillColor="rgba(79, 70, 229, 0.2)"
-                strokeColor="rgba(79, 70, 229, 0.8)"
-                strokeWidth={2}
-              />
-              <Marker
-                coordinate={{ latitude: siteLat, longitude: siteLng }}
-                title={worker?.building_name}
-                description={worker?.building_address || worker?.address}
-              />
-            </MapView>
-          ) : locationMissing ? (
+        {/* Distance to the building (no map) */}
+        <View style={styles.distanceCard}>
+          {locationMissing ? (
             <View style={styles.mapPlaceholder}>
               <Text style={styles.mapLoadingText}>{t("today.mapLocationOff")}</Text>
               <TouchableOpacity
@@ -459,10 +452,31 @@ export default function AttendanceScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
+          ) : distance !== null ? (
+            <View style={styles.mapPlaceholder}>
+              <Text style={styles.distanceValue}>{t("units.meters", { count: distance })}</Text>
+              <Text style={styles.distanceLabel}>{t("today.distanceFromBuilding")}</Text>
+              <Text
+                style={[
+                  styles.distanceStatus,
+                  { color: isInsideGeofence ? "#059669" : "#dc2626" },
+                ]}
+              >
+                {isInsideGeofence ? t("today.insideWorkArea") : t("today.outsideWorkArea")}
+              </Text>
+            </View>
+          ) : currentLocation ? (
+            // A fix, but the building has no coordinates to measure against.
+            <View style={styles.mapPlaceholder}>
+              <Text style={styles.mapLoadingText}>{t("today.unassignedSite")}</Text>
+            </View>
           ) : (
             <View style={styles.mapPlaceholder}>
               <ActivityIndicator color="#4f46e5" />
               <Text style={styles.mapLoadingText}>{t("today.acquiringGps")}</Text>
+              {gpsSlow && (
+                <Text style={styles.gpsSlowText}>{t("today.acquiringGpsSlow")}</Text>
+              )}
             </View>
           )}
         </View>
@@ -579,22 +593,32 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#374151",
   },
-  mapContainer: {
-    height: 220,
+  distanceCard: {
     borderRadius: 16,
     overflow: "hidden",
     marginBottom: 12,
     borderWidth: 1,
     borderColor: "#e5e7eb",
   },
-  map: { width: "100%", height: "100%" },
   mapPlaceholder: {
-    flex: 1,
+    minHeight: 140,
+    paddingVertical: 20,
+    paddingHorizontal: 16,
     backgroundColor: "#eef2ff",
     justifyContent: "center",
     alignItems: "center",
   },
-  mapLoadingText: { fontSize: 13, color: "#6b7280", marginTop: 8 },
+  mapLoadingText: { fontSize: 13, color: "#6b7280", marginTop: 8, textAlign: "center" },
+  gpsSlowText: {
+    fontSize: 13,
+    color: "#92400e",
+    marginTop: 8,
+    textAlign: "center",
+    lineHeight: 18,
+  },
+  distanceValue: { fontSize: 40, fontWeight: "bold", color: "#111827" },
+  distanceLabel: { fontSize: 14, color: "#6b7280", marginTop: 2 },
+  distanceStatus: { fontSize: 16, fontWeight: "bold", marginTop: 12, textAlign: "center" },
   enableLocationButton: {
     marginTop: 10,
     backgroundColor: "#4f46e5",

@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useTranslation } from "react-i18next";
 import LanguagePicker from "../components/LanguagePicker";
@@ -64,68 +65,71 @@ export default function LoginScreen() {
   };
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-      style={styles.container}
-    >
-      {/* The worker may not read the phone's language: let them switch before signing in. */}
-      <View style={styles.languageRow}>
-        <LanguagePicker variant="compact" />
-      </View>
-      <View style={styles.card}>
-        <View style={styles.iconContainer}>
-          <Text style={styles.iconText}>🏗️</Text>
+    <SafeAreaView style={styles.safeArea}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={styles.container}
+      >
+        {/* The worker may not read the phone's language: let them switch before signing in. */}
+        <View style={styles.languageRow}>
+          <LanguagePicker variant="compact" />
         </View>
-        <Text style={styles.title}>{t("login.title")}</Text>
-        <Text style={styles.subtitle}>{t("login.subtitle")}</Text>
-
-        {sessionExpired && (
-          <View style={styles.noticeBanner} accessibilityRole="alert">
-            <Text style={styles.noticeText}>{t("errors.sessionExpired")}</Text>
+        <View style={styles.card}>
+          <View style={styles.iconContainer}>
+            <Text style={styles.iconText}>🏗️</Text>
           </View>
-        )}
+          <Text style={styles.title}>{t("login.title")}</Text>
+          <Text style={styles.subtitle}>{t("login.subtitle")}</Text>
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>{t("login.username")}</Text>
-          <TextInput
-            style={styles.input}
-            placeholder={t("login.usernamePlaceholder")}
-            placeholderTextColor="#9ca3af"
-            autoCapitalize="none"
-            value={username}
-            onChangeText={setUsername}
-          />
-        </View>
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>{t("login.password")}</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="••••••••"
-            placeholderTextColor="#9ca3af"
-            secureTextEntry
-            value={password}
-            onChangeText={setPassword}
-          />
-        </View>
-
-        <TouchableOpacity
-          style={styles.button}
-          onPress={handleLogin}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.buttonText}>{t("login.signIn")}</Text>
+          {sessionExpired && (
+            <View style={styles.noticeBanner} accessibilityRole="alert">
+              <Text style={styles.noticeText}>{t("errors.sessionExpired")}</Text>
+            </View>
           )}
-        </TouchableOpacity>
-      </View>
-    </KeyboardAvoidingView>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>{t("login.username")}</Text>
+            <TextInput
+              style={styles.input}
+              placeholder={t("login.usernamePlaceholder")}
+              placeholderTextColor="#9ca3af"
+              autoCapitalize="none"
+              value={username}
+              onChangeText={setUsername}
+            />
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>{t("login.password")}</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="••••••••"
+              placeholderTextColor="#9ca3af"
+              secureTextEntry
+              value={password}
+              onChangeText={setPassword}
+            />
+          </View>
+
+          <TouchableOpacity
+            style={styles.button}
+            onPress={handleLogin}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.buttonText}>{t("login.signIn")}</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: "#f3f4f6" },
   languageRow: { flexDirection: "row", justifyContent: "flex-end", marginBottom: 12 },
   container: {
     flex: 1,

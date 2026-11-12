@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { AppState } from "react-native";
 import { Stack, useRouter, useSegments } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 // Initialises the app language before any screen renders.
 import "../i18n";
 import { hasCompletedOnboarding } from "../utils/onboarding";
@@ -51,6 +52,8 @@ function PermissionWatcher() {
 export default function RootLayout() {
   return (
     <>
+      {/* Dark clock/battery icons: every screen has a light background. */}
+      <StatusBar style="dark" />
       <PermissionWatcher />
       <Stack screenOptions={{ headerShown: false }}>
         {/* Entry: routes to onboarding, permissions, login or the tabs */}

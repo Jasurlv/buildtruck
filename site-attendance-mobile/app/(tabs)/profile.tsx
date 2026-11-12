@@ -2,13 +2,13 @@ import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import Constants from "expo-constants";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
@@ -105,7 +105,7 @@ export default function ProfileScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={["top", "left", "right"]}>
         <View style={styles.centered}>
           <ActivityIndicator size="large" color="#4f46e5" />
         </View>
@@ -117,7 +117,7 @@ export default function ProfileScreen() {
   const radius = Number(worker?.radius_meters);
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={["top", "left", "right"]}>
       <ScrollView contentContainerStyle={styles.container}>
         <Text style={styles.screenHeader}>{t("profile.title")}</Text>
         <Text style={styles.screenSubtitle}>{t("profile.subtitle")}</Text>

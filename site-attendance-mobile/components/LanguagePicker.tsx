@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useTranslation } from "react-i18next";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LANGUAGES, currentLanguage, setLanguage, type Language } from "../i18n";
 
 type Variant = "compact" | "row";
@@ -13,6 +14,8 @@ type Variant = "compact" | "row";
 export default function LanguagePicker({ variant = "compact" }: { variant?: Variant }) {
   const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(false);
+  // Keeps the sheet clear of the status and navigation bars (0 where not needed).
+  const insets = useSafeAreaInsets();
   // i18n.language changes re-render this component (useTranslation subscribes).
   const active = LANGUAGES.find((language) => language.code === i18n.language) ?? LANGUAGES[0];
 
@@ -46,7 +49,12 @@ export default function LanguagePicker({ variant = "compact" }: { variant?: Vari
       )}
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <View style={styles.backdrop}>
+        <View
+          style={[
+            styles.backdrop,
+            { paddingTop: 24 + insets.top, paddingBottom: 24 + insets.bottom },
+          ]}
+        >
           <Pressable
             style={StyleSheet.absoluteFill}
             onPress={() => setOpen(false)}
