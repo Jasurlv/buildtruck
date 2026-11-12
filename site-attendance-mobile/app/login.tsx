@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   StyleSheet,
   Text,
@@ -17,6 +17,7 @@ import {
   getApiBaseUrl,
   startWorkerSession,
 } from "../utils/api";
+import { checkPermissionGate } from "../utils/permissions";
 
 export default function LoginScreen() {
   const [username, setUsername] = useState("");
@@ -25,6 +26,14 @@ export default function LoginScreen() {
   const router = useRouter();
   const { reason } = useLocalSearchParams<{ reason?: string }>();
   const sessionExpired = reason === SESSION_EXPIRED_REASON;
+
+  // Login is also reached by logging out or an expired session: the permissions
+  // must still be complete, otherwise the worker fixes them first.
+  useEffect(() => {
+    void checkPermissionGate().then((gate) => {
+      if (!gate.canContinue) router.replace("/permissions");
+    });
+  }, [router]);
 
   const handleLogin = async () => {
     if (!username || !password) {

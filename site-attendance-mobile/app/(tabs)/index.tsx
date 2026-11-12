@@ -17,6 +17,7 @@ import MapView, { Marker, Circle } from "react-native-maps";
 import { SessionExpiredError, workerFetch } from "../../utils/api";
 import type { ShiftRules } from "../../utils/shiftTime";
 import { strings } from "../../constants/strings";
+import { checkPermissionGate } from "../../utils/permissions";
 import {
   getLocationPermission,
   openAppSettings,
@@ -265,6 +266,21 @@ export default function AttendanceScreen() {
     // If a shift is already active, jump straight to the active shift page
     if (activeShift) {
       router.push("/shift-active");
+      return;
+    }
+
+    // Every required permission, checked now: one may have been turned off since
+    // the app opened. Say what is wrong instead of failing later.
+    const gate = await checkPermissionGate();
+    if (!gate.canContinue) {
+      Alert.alert(strings.permissions.startWorkTitle, strings.permissions.startWorkMessage, [
+        { text: strings.cancel, style: "cancel" },
+        {
+          text: strings.permissions.fix,
+          onPress: () =>
+            router.push({ pathname: "/permissions", params: { returnTo: "back" } }),
+        },
+      ]);
       return;
     }
 

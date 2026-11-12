@@ -1,10 +1,13 @@
 import { Platform } from "react-native";
-import Constants, { ExecutionEnvironment } from "expo-constants";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import * as TaskManager from "expo-task-manager";
 import { serverNow } from "./serverClock";
+import { ensureNotificationChannel, immediateAlertTrigger } from "./notificationChannel";
+import { isExpoGo } from "./runtime";
+
+export { isExpoGo };
 
 const LOCATION_TASK = "buildtruck-active-shift-geofence";
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;
@@ -99,9 +102,9 @@ if (!TaskManager.isTaskDefined(LOCATION_TASK)) {
           content: {
             title: "Workplace location check",
             body: `You appear to be outside the workplace zone (${Math.round(distance)} m away).`,
-            ...(Platform.OS === "android" ? { channelId: "geofence-alerts" } : {}),
           },
-          trigger: null,
+          // Shown now, on the alerts channel (a channelId inside `content` is ignored).
+          trigger: immediateAlertTrigger(),
         });
       }
     } catch (taskError) {
@@ -109,13 +112,6 @@ if (!TaskManager.isTaskDefined(LOCATION_TASK)) {
     }
   });
 }
-
-/**
- * Expo Go cannot run background location (iOS rejects it for missing
- * NSLocation*UsageDescription keys, which only an installed build has), so the
- * background task is never started there.
- */
-export const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
 /**
  * - "started": the background task is running (or already was).
@@ -129,12 +125,7 @@ export type BackgroundStartResult = "started" | "expo-go" | "permission-denied" 
 let expoGoLogged = false;
 
 async function prepareNotifications(): Promise<void> {
-  if (Platform.OS === "android") {
-    await Notifications.setNotificationChannelAsync("geofence-alerts", {
-      name: "Workplace geofence",
-      importance: Notifications.AndroidImportance.HIGH,
-    });
-  }
+  await ensureNotificationChannel();
   await Notifications.requestPermissionsAsync();
 }
 

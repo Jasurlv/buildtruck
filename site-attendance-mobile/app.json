@@ -8,15 +8,33 @@
     "scheme": "siteattendancemobile",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.globaltimetrack.timetrack"
     },
     "android": {
+      "package": "com.globaltimetrack.timetrack",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
+      "permissions": [
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.POST_NOTIFICATIONS"
+      ],
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.RECEIVE_BOOT_COMPLETED"
+      ],
       "predictiveBackGestureEnabled": false
     },
     "web": {
@@ -30,24 +48,35 @@
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",
+          "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
       ],
       "expo-secure-store",
       "expo-sharing",
-      "expo-notifications",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/android-icon-monochrome.png",
+          "color": "#4f46e5",
+          "enableRemoteNotifications": false
+        }
+      ],
       [
         "expo-location",
         {
           "locationWhenInUsePermission": "TimeTrack uses your precise location when you start work, to confirm you are at your assigned building. It is not used to track you outside work.",
-          "locationAlwaysAndWhenInUsePermission": "TimeTrack checks that you are still at your assigned building during an active shift, also when the app is in the background. It is not used to track you outside work.",
-          "locationAlwaysPermission": "TimeTrack checks that you are still at your assigned building during an active shift, also when the app is in the background. It is not used to track you outside work.",
+          "locationAlwaysAndWhenInUsePermission": "During an active shift TimeTrack checks that you are still at your assigned building, also when the app is in the background. Your employer sees these checks. Location is never collected outside a shift.",
+          "locationAlwaysPermission": "During an active shift TimeTrack checks that you are still at your assigned building, also when the app is in the background. Your employer sees these checks. Location is never collected outside a shift.",
           "isIosBackgroundLocationEnabled": true,
           "isAndroidBackgroundLocationEnabled": true,
-          "isAndroidForegroundServiceEnabled": true
+          "isAndroidForegroundServiceEnabled": true,
+          "androidForegroundServiceIcon": "./assets/images/android-icon-monochrome.png"
         }
-      ]
+      ],
+      "expo-status-bar",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

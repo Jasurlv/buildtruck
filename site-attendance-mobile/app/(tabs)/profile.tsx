@@ -14,6 +14,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { SessionExpiredError, workerFetch } from "../../utils/api";
 import { resetOnboarding } from "../../utils/onboarding";
+import { strings } from "../../constants/strings";
 import { stopBackgroundGeofenceMonitoring } from "../../utils/backgroundGeofence";
 
 type WorkerProfile = {
@@ -199,20 +200,17 @@ export default function ProfileScreen() {
           )}
         </TouchableOpacity>
 
-        {__DEV__ && (
-          <TouchableOpacity
-            onPress={async () => {
-              await resetOnboarding();
-              Alert.alert(
-                "Onboarding reset",
-                "Close and reopen the app to see the onboarding again.",
-              );
-            }}
-            accessibilityRole="button"
-          >
-            <Text style={styles.devLinkText}>Show onboarding again (dev only)</Text>
-          </TouchableOpacity>
-        )}
+        {/* Intro pages, then the Permissions screen, then back into the app (the
+            session is kept). */}
+        <TouchableOpacity
+          onPress={async () => {
+            await resetOnboarding().catch(() => {});
+            router.replace("/onboarding");
+          }}
+          accessibilityRole="button"
+        >
+          <Text style={styles.devLinkText}>{strings.showOnboardingAgain}</Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );

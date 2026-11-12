@@ -18,6 +18,7 @@ import LunchModal from "../components/LunchModal";
 import { strings } from "../constants/strings";
 import { SessionExpiredError, workerFetch } from "../utils/api";
 import { serverNow } from "../utils/serverClock";
+import { ALERTS_CHANNEL_ID, ensureNotificationChannel } from "../utils/notificationChannel";
 import {
   computeShiftStatus,
   formatClock,
@@ -324,6 +325,7 @@ export default function ActiveShiftScreen() {
     await clearLunchReminder();
     let notificationId: string | null = null;
     try {
+      await ensureNotificationChannel();
       notificationId = await Notifications.scheduleNotificationAsync({
         content: {
           title: "Lunch reminder",
@@ -332,7 +334,7 @@ export default function ActiveShiftScreen() {
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
           seconds: LUNCH_REMINDER_MS / 1000,
-          ...(Platform.OS === "android" ? { channelId: "geofence-alerts" } : {}),
+          ...(Platform.OS === "android" ? { channelId: ALERTS_CHANNEL_ID } : {}),
         },
       });
     } catch (err) {
