@@ -1,4 +1,6 @@
-# Deploying the Buildtruck API and database
+# Deploying the Buildtruck API, database and dashboard
+
+The admin dashboard has its own section: [12. Dashboard](#12-dashboard-adminglobaltimetrackcom).
 
 Target: Hetzner CX23, Ubuntu 24.04 (Helsinki, backups on), Node.js 22, PostgreSQL 16.
 
@@ -237,6 +239,135 @@ health check. Each migration runs once, inside a transaction, and is recorded in
 `migrations/006_....sql`. Never edit a migration that has already been applied.
 
 If the systemd unit file changes, copy it again and run `sudo systemctl daemon-reload`.
+
+## 12. Dashboard (admin.globaltimetrack.com)
+
+The admin dashboard (`site-attendance-admin`, Next.js) runs on the same server:
+
+```
+browser ──HTTPS──▶ nginx :443 (admin.globaltimetrack.com) ──▶ next start 127.0.0.1:3000
+browser ──HTTPS──▶ nginx :443 (api.globaltimetrack.com)   ──▶ API 127.0.0.1:5000
+```
+
+The browser calls the API directly (another origin), so the API must allow the
+dashboard's origin (CORS, step 12.3).
+
+### 12.1 DNS
+
+At your DNS provider, add an `A` record (and `AAAA` for IPv6) for
+`admin.globaltimetrack.com` pointing at the server, like the API's. Check before
+running certbot:
+
+```bash
+dig +short admin.globaltimetrack.com      # must print the server's IP
+```
+
+### 12.2 Build settings: /etc/buildtruck/admin.env
+
+The API URL and timezone are baked into the dashboard when it is built. They are not
+secret (every browser downloads them):
+
+```bash
+sudo cp ~/buildtruck/deploy/admin.env.example /etc/buildtruck/admin.env
+sudo chown root:deploy /etc/buildtruck/admin.env
+sudo chmod 644 /etc/buildtruck/admin.env
+cat /etc/buildtruck/admin.env
+```
+
+It should contain (no quotes):
+
+```
+NEXT_PUBLIC_API_URL=https://api.globaltimetrack.com/api
+NEXT_PUBLIC_APP_TIMEZONE=Europe/Riga
+```
+
+After changing a value, run `update-admin.sh` again; a restart alone does not apply it.
+
+### 12.3 Allow the dashboard in the API (CORS)
+
+`CORS_ORIGINS` is a comma-separated list. Each entry must match the browser's
+`Origin` exactly: scheme, host and port, no trailing slash, no path. In
+`/etc/buildtruck/api.env` set:
+
+```
+CORS_ORIGINS=https://admin.globaltimetrack.com,http://localhost:3000
+```
+
+`http://localhost:3000` lets a developer run the dashboard locally (`npm run dev`)
+against the production API; remove it if nobody does that. Then:
+
+```bash
+sudo nano /etc/buildtruck/api.env
+sudo systemctl restart buildtruck-api
+# Expect: Access-Control-Allow-Origin: https://admin.globaltimetrack.com
+curl -sI -H "Origin: https://admin.globaltimetrack.com" https://api.globaltimetrack.com/api/health | grep -i access-control
+```
+
+### 12.4 First deploy
+
+```bash
+# Service (started by the script after the first build)
+sudo cp ~/buildtruck/deploy/systemd/buildtruck-admin.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable buildtruck-admin
+
+# Install, build, start, health check
+bash ~/buildtruck/deploy/update-admin.sh
+
+# nginx site
+sudo cp ~/buildtruck/deploy/nginx/buildtruck-admin.conf /etc/nginx/sites-available/buildtruck-admin
+sudo ln -s /etc/nginx/sites-available/buildtruck-admin /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+
+# HTTPS (adds the TLS server block and the HTTP->HTTPS redirect)
+sudo certbot --nginx -d admin.globaltimetrack.com --redirect -m you@example.com --agree-tos
+
+# Expect 200 and the three security headers
+curl -sI https://admin.globaltimetrack.com | grep -iE "^HTTP|x-content-type|x-frame|referrer-policy"
+```
+
+Then open https://admin.globaltimetrack.com and log in. If login fails with a network
+error, check CORS (12.3) in the browser's developer console.
+
+Logs: `journalctl -u buildtruck-admin -f`. The service runs with the same hardening as the
+API; the only writable path is the dashboard's `.next` directory (Next's runtime cache).
+
+### 12.5 Updating
+
+Push to `main`, then on the server, as `deploy`:
+
+```bash
+bash ~/buildtruck/deploy/update-admin.sh
+```
+
+It pulls, runs `npm ci`, builds into `.next-build` while the old version keeps serving,
+swaps it in, restarts the service and checks `http://127.0.0.1:3000/`. It ends with the
+deployed commit. The previous build stays in `.next-old`; to roll back:
+
+```bash
+cd ~/buildtruck/site-attendance-admin
+mv .next .next-failed && mv .next-old .next && sudo systemctl restart buildtruck-admin
+```
+
+If the unit file changes, copy it again and run `sudo systemctl daemon-reload`.
+
+### 12.6 If the build is killed (low memory)
+
+`next build` needs about 1-2 GB of memory next to the API and PostgreSQL. If the build
+stops with `Killed`, exit code 137 or `JavaScript heap out of memory`, add a 2 GB swap
+file once:
+
+```bash
+free -h                                   # "Swap: 0B" means there is none
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+free -h
+```
+
+Then run `update-admin.sh` again. The running site is not affected by a failed build.
 
 ## Optional: moving existing local data to production
 

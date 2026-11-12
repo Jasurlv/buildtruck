@@ -1,0 +1,48 @@
+[Unit]
+Description=Buildtruck admin dashboard (Next.js)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/home/deploy/buildtruck/site-attendance-admin
+Environment=NODE_ENV=production
+Environment=NEXT_TELEMETRY_DISABLED=1
+# Only nginx talks to it. The API URL and timezone are baked in at build time
+# (deploy/update-admin.sh reads /etc/buildtruck/admin.env), so no EnvironmentFile here.
+ExecStart=/usr/bin/node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3000
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# Hardening, as for the API: read-only code, network sockets only.
+# NoNewPrivileges also stops the process from using the deploy user's sudo rights.
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The one writable place: .next. `next start` writes its runtime cache there
+# (verified: serving a page writes .next/server/route-cache/...; .next/cache holds
+# fetch and image caches); nothing outside .next is written. The "-" lets the
+# service start before the first build has created .next.
+ReadWritePaths=-/home/deploy/buildtruck/site-attendance-admin/.next
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

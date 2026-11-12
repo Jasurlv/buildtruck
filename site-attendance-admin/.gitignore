@@ -15,6 +15,10 @@
 
 # next.js
 /.next/
+# deploy/update-admin.sh: the build in progress and the previous build (rollback)
+/.next-build/
+/.next-old/
+/.next-failed/
 /out/
 
 # production
