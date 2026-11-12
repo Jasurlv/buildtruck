@@ -40,16 +40,34 @@ export function appDate(instant: Date = new Date()): string {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+/** "en": DD/MM/YYYY; "ru": DD.MM.YYYY. Only the order and separators change. */
+export type DateStyle = "en" | "ru";
+
+const DATE_SEPARATOR: Record<DateStyle, string> = { en: "/", ru: "." };
+
 /**
- * A timestamp from the API as "DD/MM/YYYY, HH:mm" (24-hour) in the sites'
- * timezone, not the browser's. Missing or invalid values become "—".
+ * A timestamp from the API as "DD/MM/YYYY, HH:mm" (24-hour; "DD.MM.YYYY, HH:mm"
+ * for "ru") in the sites' timezone, not the browser's. Missing or invalid values
+ * become "—". CSV exports always use the "en" form, so files stay the same.
  */
-export function formatAppDateTime(value: string | null | undefined): string {
+export function formatAppDateTime(
+  value: string | null | undefined,
+  style: DateStyle = "en",
+): string {
   if (!value) return "—";
   const instant = new Date(value);
   if (Number.isNaN(instant.getTime())) return "—";
   const parts = partsOf(dateTimeFormatter, instant);
-  return `${parts.day}/${parts.month}/${parts.year}, ${parts.hour}:${parts.minute}`;
+  const separator = DATE_SEPARATOR[style];
+  return `${parts.day}${separator}${parts.month}${separator}${parts.year}, ${parts.hour}:${parts.minute}`;
+}
+
+/** A calendar date (YYYY-MM-DD, already the sites' day): as is for "en", DD.MM.YYYY for "ru". */
+export function formatWorkDate(value: string, style: DateStyle = "en"): string {
+  const date = String(value).slice(0, 10);
+  if (style === "en") return date;
+  const [year, month, day] = date.split("-");
+  return year && month && day ? `${day}.${month}.${year}` : date;
 }
 
 /** Adds whole days to a YYYY-MM-DD date (calendar arithmetic, unaffected by DST). */

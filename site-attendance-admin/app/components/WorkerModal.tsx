@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { adminFetch } from "@/utils/api";
+import { useTranslation, type TranslationKey } from "@/i18n";
+import { errorTextOf, readJson, throwApiError } from "@/i18n/apiErrors";
 
 const DEFAULT_START_TIME = "08:00";
 
@@ -33,8 +35,10 @@ export default function WorkerModal({
   });
 
   const [buildings, setBuildings] = useState<any[]>([]);
-  const [hourlyRateError, setHourlyRateError] = useState<string | null>(null);
-  const [startTimeError, setStartTimeError] = useState<string | null>(null);
+  // Field errors are kept as keys, so they follow a language change.
+  const [hourlyRateError, setHourlyRateError] = useState<TranslationKey | null>(null);
+  const [startTimeError, setStartTimeError] = useState<TranslationKey | null>(null);
+  const { t } = useTranslation();
   const startTimeInputRef = useRef<HTMLInputElement>(null);
   const hourlyRateInputRef = useRef<HTMLInputElement>(null);
 
@@ -42,12 +46,12 @@ export default function WorkerModal({
     if (isOpen) {
       adminFetch("/buildings", token)
         .then((res) => {
-          if (!res.ok) throw new Error("Failed to fetch buildings");
+          if (!res.ok) throw new Error("buildings request failed");
           return res;
         })
         .then((res) => res.json())
         .then((data) => setBuildings(data))
-        .catch(() => showNotification("Failed to fetch buildings", "error"));
+        .catch(() => showNotification(t("buildings.loadFailed"), "error"));
 
       if (workerToEdit) {
         setWorkerForm({
@@ -81,18 +85,18 @@ export default function WorkerModal({
     const rateText = workerForm.hourly_rate.trim();
     const hourlyRate = Number(rateText);
     if (rateText === "" && !hourlyRateInputRef.current?.validity.badInput) {
-      setHourlyRateError("Hourly rate is required");
+      setHourlyRateError("workerModal.rateRequired");
       hourlyRateInputRef.current?.focus();
       return;
     }
     if (rateText === "" || !Number.isFinite(hourlyRate) || hourlyRate <= 0) {
-      setHourlyRateError("Hourly rate must be a positive number");
+      setHourlyRateError("workerModal.rateInvalid");
       hourlyRateInputRef.current?.focus();
       return;
     }
 
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(workerForm.work_start_time)) {
-      setStartTimeError("Enter a start time as HH:MM, for example 08:00");
+      setStartTimeError("workerModal.startTimeInvalid");
       startTimeInputRef.current?.focus();
       return;
     }
@@ -114,19 +118,20 @@ export default function WorkerModal({
           hourly_rate: hourlyRate,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to save worker");
+      if (!res.ok) await throwApiError(res, await readJson(res));
 
       showNotification(
-        workerToEdit
-          ? "Worker updated successfully!"
-          : "Worker registered successfully!",
+        workerToEdit ? t("workerModal.updated") : t("workerModal.created"),
         "success",
       );
       onSuccess();
       onClose();
-    } catch (err: any) {
-      showNotification(err.message || "Error saving worker", "error");
+    } catch (err) {
+      const text = errorTextOf(err);
+      showNotification(
+        text.key === "errors.generic" ? t("workerModal.saveFailed") : t(text.key, text.values),
+        "error",
+      );
     }
   };
 
@@ -138,20 +143,19 @@ export default function WorkerModal({
         <button
           onClick={onClose}
           className="absolute top-6 right-6 text-gray-400 hover:text-gray-700 p-1.5 rounded-full bg-gray-50"
+          aria-label={t("common.close")}
         >
           <X size={20} />
         </button>
         <h2 className="text-xl font-bold mb-2">
-          {workerToEdit ? "Edit Worker" : "Register New Worker"}
+          {workerToEdit ? t("workerModal.editTitle") : t("workerModal.addTitle")}
         </h2>
-        <p className="text-xs text-gray-500 mb-6">
-          Update credentials and site assignment.
-        </p>
+        <p className="text-xs text-gray-500 mb-6">{t("workerModal.subtitle")}</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
-              Full Name
+              {t("workerModal.fullName")}
             </label>
             <input
               type="text"
@@ -165,7 +169,7 @@ export default function WorkerModal({
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
-              Username
+              {t("workerModal.username")}
             </label>
             <input
               type="text"
@@ -179,7 +183,7 @@ export default function WorkerModal({
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
-              Password {workerToEdit && "(Leave blank to keep)"}
+              {t("workerModal.password")} {workerToEdit && t("workerModal.passwordKeep")}
             </label>
             <input
               type="password"
@@ -194,7 +198,7 @@ export default function WorkerModal({
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
-              Hourly Rate (€ / hr)
+              {t("workerModal.rate")}
             </label>
             {/* No `required`: the browser's native check would block submit before
                 handleSubmit can show the field error below. */}
@@ -216,13 +220,13 @@ export default function WorkerModal({
             />
             {hourlyRateError && (
               <p id="hourly-rate-error" className="mt-1 text-xs text-red-600">
-                {hourlyRateError}
+                {t(hourlyRateError)}
               </p>
             )}
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
-              Work Start Time (HH:MM)
+              {t("workerModal.startTime")}
             </label>
             <input
               ref={startTimeInputRef}
@@ -240,13 +244,13 @@ export default function WorkerModal({
             />
             {startTimeError && (
               <p id="start-time-error" className="mt-1 text-xs text-red-600">
-                {startTimeError}
+                {t(startTimeError)}
               </p>
             )}
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
-              Assigned Building Site
+              {t("workerModal.site")}
             </label>
             <select
               value={workerForm.assigned_building_id}
@@ -258,7 +262,7 @@ export default function WorkerModal({
               }
               className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm bg-white"
             >
-              <option value="">Select a construction site...</option>
+              <option value="">{t("workerModal.selectSite")}</option>
               {buildings.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
@@ -272,13 +276,13 @@ export default function WorkerModal({
               onClick={onClose}
               className="px-5 py-2.5 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-100"
             >
-              Cancel
+              {t("common.cancel")}
             </button>
             <button
               type="submit"
               className="px-6 py-2.5 rounded-xl text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white"
             >
-              {workerToEdit ? "Update Worker" : "Create Worker"}
+              {workerToEdit ? t("workerModal.update") : t("workerModal.create")}
             </button>
           </div>
         </form>

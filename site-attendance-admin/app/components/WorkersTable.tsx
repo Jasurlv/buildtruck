@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import { Users, Plus, Trash2, Edit, MapPin } from "lucide-react";
 import { adminFetch } from "@/utils/api";
+import { useTranslation } from "@/i18n";
+import { errorTextOf, throwApiError } from "@/i18n/apiErrors";
 
 interface WorkersTableProps {
   token: string;
@@ -20,15 +22,16 @@ export default function WorkersTable({
   refreshTrigger,
 }: WorkersTableProps) {
   const [workers, setWorkers] = useState<any[]>([]);
+  const { t } = useTranslation();
 
   const fetchWorkers = async () => {
     try {
       const res = await adminFetch("/workers", token);
-      if (!res.ok) throw new Error("Failed to fetch workers");
+      if (!res.ok) await throwApiError(res);
       const data = await res.json();
       setWorkers(data);
-    } catch (err) {
-      showNotification("Failed to fetch workers", "error");
+    } catch {
+      showNotification(t("workers.loadFailed"), "error");
     }
   };
 
@@ -37,14 +40,18 @@ export default function WorkersTable({
   }, [refreshTrigger, token]);
 
   const handleDelete = async (id: number) => {
-    if (!confirm("Are you sure you want to remove this worker?")) return;
+    if (!confirm(t("workers.confirmDelete"))) return;
     try {
       const response = await adminFetch(`/workers/${id}`, token, { method: "DELETE" });
-      if (!response.ok) throw new Error("Failed to remove worker");
-      showNotification("Worker removed successfully", "success");
+      if (!response.ok) await throwApiError(response);
+      showNotification(t("workers.deleted"), "success");
       fetchWorkers();
     } catch (err) {
-      showNotification("Failed to remove worker", "error");
+      const text = errorTextOf(err, "workers.deleteFailed");
+      showNotification(
+        text.key === "errors.generic" ? t("workers.deleteFailed") : t(text.key, text.values),
+        "error",
+      );
     }
   };
 
@@ -53,18 +60,16 @@ export default function WorkersTable({
       <div className="p-6 border-b border-gray-100 flex justify-between items-center">
         <div>
           <h3 className="font-bold text-gray-900 flex items-center gap-2 text-lg">
-            <Users size={20} className="text-indigo-600" /> Workers Directory
-            Management ({workers.length})
+            <Users size={20} className="text-indigo-600" />{" "}
+            {t("workers.title", { count: workers.length })}
           </h3>
-          <p className="text-xs text-gray-500">
-            Register and assign personnel to construction zones
-          </p>
+          <p className="text-xs text-gray-500">{t("workers.subtitle")}</p>
         </div>
         <button
           onClick={onOpenAddModal}
           className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-medium shadow-sm transition-all"
         >
-          <Plus size={16} /> Register Worker
+          <Plus size={16} /> {t("workers.add")}
         </button>
       </div>
 
@@ -72,20 +77,19 @@ export default function WorkersTable({
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-gray-50/70 border-b border-gray-200 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              <th className="py-3.5 px-6">Full Name</th>
-              <th className="py-3.5 px-6">Username</th>
-              <th className="py-3.5 px-6">Hourly Rate</th>
-              <th className="py-3.5 px-6">Start Time</th>
-              <th className="py-3.5 px-6">Assigned Site</th>
-              <th className="py-3.5 px-6 text-right">Actions</th>
+              <th className="py-3.5 px-6">{t("workers.colName")}</th>
+              <th className="py-3.5 px-6">{t("workers.colUsername")}</th>
+              <th className="py-3.5 px-6">{t("workers.colRate")}</th>
+              <th className="py-3.5 px-6">{t("workers.colStart")}</th>
+              <th className="py-3.5 px-6">{t("workers.colSite")}</th>
+              <th className="py-3.5 px-6 text-right">{t("workers.colActions")}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 text-sm">
             {workers.length === 0 ? (
               <tr>
                 <td colSpan={6} className="py-12 text-center text-gray-400">
-                  No workers registered yet. Click &quot;Register Worker&quot;
-                  above.
+                  {t("workers.empty")}
                 </td>
               </tr>
             ) : (
@@ -101,7 +105,7 @@ export default function WorkersTable({
                     {w.username}
                   </td>
                   <td className="py-4 px-6 font-medium text-emerald-700">
-                    €{w.hourly_rate}/hr
+                    {t("workers.rate", { rate: w.hourly_rate })}
                   </td>
                   <td className="py-4 px-6 tabular-nums text-gray-700">
                     {w.work_start_time}
@@ -113,19 +117,23 @@ export default function WorkersTable({
                       </span>
                     ) : (
                       <span className="text-gray-400 italic text-xs">
-                        Unassigned
+                        {t("workers.unassigned")}
                       </span>
                     )}
                   </td>
                   <td className="py-4 px-6 text-right space-x-1">
                     <button
                       onClick={() => onOpenEditModal(w)}
+                      aria-label={t("common.edit")}
+                      title={t("common.edit")}
                       className="text-gray-400 hover:text-indigo-600 p-2 rounded-lg transition-colors"
                     >
                       <Edit size={16} />
                     </button>
                     <button
                       onClick={() => handleDelete(w.id)}
+                      aria-label={t("common.delete")}
+                      title={t("common.delete")}
                       className="text-gray-400 hover:text-rose-600 p-2 rounded-lg transition-colors"
                     >
                       <Trash2 size={16} />

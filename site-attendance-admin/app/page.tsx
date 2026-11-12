@@ -16,7 +16,10 @@ import WorkersTable from "@/components/WorkersTable";
 import BuildingModal from "@/components/BuildingModal";
 import WorkerModal from "@/components/WorkerModal";
 import AttendanceReport from "@/components/AttendanceReport";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { adminFetch } from "@/utils/api";
+import { useTranslation } from "@/i18n";
+import { errorTextOf, readJson, throwApiError, type ErrorText } from "@/i18n/apiErrors";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL?.trim() || "";
 
@@ -24,7 +27,9 @@ export default function AdminApp() {
   const [token, setToken] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  // Kept as a key, so the message follows a language change.
+  const [error, setError] = useState<ErrorText | null>(null);
+  const { t } = useTranslation();
 
   const [currentTab, setCurrentTab] = useState<
     "overview" | "buildings" | "workers" | "reports"
@@ -59,10 +64,7 @@ export default function AdminApp() {
         setToken(savedToken);
       } else {
         handleLogout();
-        showNotification(
-          "Session expired after 30 minutes. Please log in again.",
-          "error",
-        );
+        showNotification(t("session.expiredOnOpen"), "error");
       }
     }
   }, []);
@@ -76,16 +78,13 @@ export default function AdminApp() {
         const elapsedMinutes = (Date.now() - Number(tokenTime)) / (1000 * 60);
         if (elapsedMinutes >= 30) {
           handleLogout();
-          showNotification(
-            "Session expired. Automatically logged out.",
-            "error",
-          );
+          showNotification(t("session.expired"), "error");
         }
       }
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [token]);
+  }, [token, t]);
 
   useEffect(() => {
     if (token) {
@@ -111,7 +110,7 @@ export default function AdminApp() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError("");
+    setError(null);
 
     try {
       const res = await adminFetch("/admin/login", null, {
@@ -119,16 +118,16 @@ export default function AdminApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
-      const data = await res.json();
+      const data = await readJson(res);
 
-      if (!res.ok) throw new Error(data.error || "Invalid login credentials");
+      if (!res.ok) await throwApiError(res, data);
 
       localStorage.setItem("admin_token", data.token);
       localStorage.setItem("admin_token_time", Date.now().toString());
       setToken(data.token);
-      showNotification("Successfully logged in!", "success");
-    } catch (err: any) {
-      setError(err.message || "Server connection failed");
+      showNotification(t("login.success"), "success");
+    } catch (err) {
+      setError(errorTextOf(err));
     }
   };
 
@@ -142,32 +141,32 @@ export default function AdminApp() {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
         <div className="bg-white rounded-3xl shadow-xl max-w-md w-full p-8 border border-gray-100">
+          <div className="flex justify-end mb-2">
+            <LanguageSwitcher />
+          </div>
           <div className="flex flex-col items-center mb-6">
             <div className="bg-indigo-600 text-white p-3 rounded-2xl mb-3 shadow-md">
               <Building2 size={32} />
             </div>
-            <h1 className="text-2xl font-bold text-gray-900">Admin Portal</h1>
-            <p className="text-xs text-gray-500">
-              Secured with JWT (30-minute session timeout)
-            </p>
+            <h1 className="text-2xl font-bold text-gray-900">{t("login.title")}</h1>
+            <p className="text-xs text-gray-500">{t("login.subtitle")}</p>
             {!API_URL && process.env.NODE_ENV === "production" && (
               <p className="mt-3 text-center text-xs text-rose-700">
-                The admin API is not configured. Set NEXT_PUBLIC_API_URL to the
-                HTTPS API URL and rebuild the dashboard.
+                {t("login.apiNotConfigured")}
               </p>
             )}
           </div>
 
           {error && (
             <div className="mb-4 bg-rose-50 border border-rose-200 text-rose-700 px-4 py-3 rounded-xl text-xs flex items-center gap-2">
-              <AlertCircle size={16} /> {error}
+              <AlertCircle size={16} /> {t(error.key, error.values)}
             </div>
           )}
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
-                Username
+                {t("login.username")}
               </label>
               <div className="relative">
                 <User
@@ -186,7 +185,7 @@ export default function AdminApp() {
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
-                Password
+                {t("login.password")}
               </label>
               <div className="relative">
                 <Lock
@@ -207,7 +206,7 @@ export default function AdminApp() {
               type="submit"
               className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl shadow-sm transition-all mt-2 text-sm"
             >
-              Sign In to Dashboard
+              {t("login.signIn")}
             </button>
           </form>
         </div>
@@ -243,12 +242,9 @@ export default function AdminApp() {
           <div className="space-y-8 animate-fadeIn">
             <div>
               <h2 className="text-2xl font-bold tracking-tight text-gray-900">
-                Operations Overview
+                {t("overview.title")}
               </h2>
-              <p className="text-xs text-gray-500 mt-1">
-                Summary of active construction sites, registered personnel, and
-                attendance tracking.
-              </p>
+              <p className="text-xs text-gray-500 mt-1">{t("overview.subtitle")}</p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -261,14 +257,14 @@ export default function AdminApp() {
                     <Building2 size={24} />
                   </div>
                   <span className="text-xs font-medium text-indigo-600 flex items-center gap-1">
-                    Manage <ArrowRight size={14} />
+                    {t("overview.manage")} <ArrowRight size={14} />
                   </span>
                 </div>
                 <h3 className="text-3xl font-bold text-gray-900 mb-1">
                   {stats.buildingsCount}
                 </h3>
                 <p className="text-sm font-medium text-gray-600">
-                  Active Building Sites
+                  {t("overview.buildings")}
                 </p>
               </div>
 
@@ -281,14 +277,14 @@ export default function AdminApp() {
                     <Users size={24} />
                   </div>
                   <span className="text-xs font-medium text-emerald-600 flex items-center gap-1">
-                    Manage <ArrowRight size={14} />
+                    {t("overview.manage")} <ArrowRight size={14} />
                   </span>
                 </div>
                 <h3 className="text-3xl font-bold text-gray-900 mb-1">
                   {stats.workersCount}
                 </h3>
                 <p className="text-sm font-medium text-gray-600">
-                  Registered Field Workers
+                  {t("overview.workers")}
                 </p>
               </div>
             </div>
@@ -329,7 +325,7 @@ export default function AdminApp() {
 
         {currentTab === "reports" && (
           // AttendanceReport reads the URL query (useSearchParams).
-          <Suspense fallback={<p className="text-sm text-gray-500">Loading report...</p>}>
+          <Suspense fallback={<p className="text-sm text-gray-500">{t("report.loadingReport")}</p>}>
             <AttendanceReport token={token} />
           </Suspense>
         )}

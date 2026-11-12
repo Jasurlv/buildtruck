@@ -9,7 +9,10 @@ import {
   APP_TIMEZONE,
   defaultDateRange,
   formatAppDateTime,
+  formatWorkDate,
 } from "@/utils/appTimezone";
+import { useTranslation, type TranslationKey } from "@/i18n";
+import { errorTextOf, readJson, throwApiError, type ErrorText } from "@/i18n/apiErrors";
 
 // "Europe/Riga" -> "Riga"
 const APP_TIMEZONE_CITY = APP_TIMEZONE.split("/").pop()!.replace(/_/g, " ");
@@ -59,7 +62,25 @@ type ReportPage = {
 
 // A response tagged with the request it answers, so a result for old filters is
 // never shown as current, and "loading" is simply "no result for this key yet".
-type ReportResult = { key: string; data?: ReportPage; error?: string };
+// Errors are kept as translation keys, so they follow a language change.
+type ReportResult = { key: string; data?: ReportPage; error?: ErrorText };
+
+const COLUMNS: TranslationKey[] = [
+  "report.colWorker",
+  "report.colSite",
+  "report.colWorkDate",
+  "report.colArrival",
+  "report.colPaidStart",
+  "report.colWaiting",
+  "report.colLate",
+  "report.colLunchStart",
+  "report.colLunchEnd",
+  "report.colLunch",
+  "report.colBreak",
+  "report.colFinished",
+  "report.colHours",
+  "report.colEarned",
+];
 
 function requestKeyOf(...parts: unknown[]): string {
   return JSON.stringify(parts);
@@ -95,12 +116,13 @@ function breakMinutesOf(shift: Shift): number | null {
 }
 
 function AutoClosedBadge() {
+  const { t } = useTranslation();
   return (
     <span
-      title="The server closed this shift after the maximum shift length. Review and correct it if needed."
+      title={t("report.autoClosedTitle")}
       className="ml-2 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800"
     >
-      Auto-closed
+      {t("report.autoClosed")}
     </span>
   );
 }
@@ -113,6 +135,7 @@ function csvCell(value: unknown): string {
 
 export default function AttendanceReport({ token }: { token: string }) {
   const searchParams = useSearchParams();
+  const { t, language } = useTranslation();
 
   // Last 30 days in the sites' timezone, matching how the backend files
   // work_date; the browser's own date can be a day behind or ahead.
@@ -127,7 +150,7 @@ export default function AttendanceReport({ token }: { token: string }) {
   const [refreshCount, setRefreshCount] = useState(0);
   const [result, setResult] = useState<ReportResult | null>(null);
   const [exporting, setExporting] = useState(false);
-  const [exportError, setExportError] = useState("");
+  const [exportError, setExportError] = useState<ErrorText | null>(null);
 
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const appliedSearch = useRef(search);
@@ -151,8 +174,8 @@ export default function AttendanceReport({ token }: { token: string }) {
 
     adminFetch(`/reports?${params}`, token, { signal: controller.signal })
       .then(async (response) => {
-        const body = await response.json();
-        if (!response.ok) throw new Error(body.error || "Failed to load report");
+        const body = await readJson(response);
+        if (!response.ok) await throwApiError(response, body);
         return body as ReportPage;
       })
       .then((report) => {
@@ -178,10 +201,7 @@ export default function AttendanceReport({ token }: { token: string }) {
       .catch((loadError) => {
         // A newer request replaced this one; its result is irrelevant.
         if (controller.signal.aborted) return;
-        setResult({
-          key,
-          error: loadError instanceof Error ? loadError.message : "Failed to load report",
-        });
+        setResult({ key, error: errorTextOf(loadError) });
       });
 
     return () => controller.abort();
@@ -225,15 +245,17 @@ export default function AttendanceReport({ token }: { token: string }) {
 
   const downloadCsv = async () => {
     setExporting(true);
-    setExportError("");
+    setExportError(null);
     try {
       // Every matching row, not just the current page.
       const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
       if (search) params.set("search", search);
       const response = await adminFetch(`/reports/export?${params}`, token);
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "Failed to export report");
+      const body = await readJson(response);
+      if (!response.ok) await throwApiError(response, body);
       const shifts: Shift[] = body.rows;
+      // Column headers and values stay in English (and dates in DD/MM/YYYY), whatever
+      // the dashboard language, so exported files keep the same layout.
       const rows = [
         [
           "Worker",
@@ -282,32 +304,27 @@ export default function AttendanceReport({ token }: { token: string }) {
       link.click();
       URL.revokeObjectURL(url);
     } catch (downloadError) {
-      setExportError(
-        downloadError instanceof Error ? downloadError.message : "Failed to export report",
-      );
+      setExportError(errorTextOf(downloadError));
     } finally {
       setExporting(false);
     }
   };
 
   const searchTooShort = searchInput.trim().length === 1;
+  const shownError = error ?? exportError;
   const totalPages = data?.total_pages ?? 1;
   const shownPage = data?.page ?? page;
 
   return (
     <section className="space-y-6">
       <header>
-        <h2 className="text-2xl font-bold text-gray-900">
-          Attendance &amp; Payroll Reports
-        </h2>
-        <p className="mt-1 text-sm text-gray-500">
-          Review recorded shifts, lunch times, hours, and earnings.
-        </p>
+        <h2 className="text-2xl font-bold text-gray-900">{t("report.title")}</h2>
+        <p className="mt-1 text-sm text-gray-500">{t("report.subtitle")}</p>
       </header>
 
       <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
         <label className="text-xs font-semibold text-gray-600">
-          Start date
+          {t("report.startDate")}
           <input
             type="date"
             value={startDate}
@@ -321,7 +338,7 @@ export default function AttendanceReport({ token }: { token: string }) {
           />
         </label>
         <label className="text-xs font-semibold text-gray-600">
-          End date
+          {t("report.endDate")}
           <input
             type="date"
             value={endDate}
@@ -335,13 +352,13 @@ export default function AttendanceReport({ token }: { token: string }) {
           />
         </label>
         <label className="min-w-0 flex-1 basis-56 text-xs font-semibold text-gray-600">
-          Search
+          {t("report.search")}
           <input
             type="search"
             value={searchInput}
             maxLength={SEARCH_MAX_LENGTH}
             onChange={(event) => handleSearchChange(event.target.value)}
-            placeholder="Search worker, username or site"
+            placeholder={t("report.searchPlaceholder")}
             className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-normal"
           />
         </label>
@@ -350,34 +367,34 @@ export default function AttendanceReport({ token }: { token: string }) {
           disabled={loading}
           className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
         >
-          <RefreshCw size={16} /> {loading ? "Loading..." : "Refresh"}
+          <RefreshCw size={16} /> {loading ? t("common.loading") : t("report.refresh")}
         </button>
         <button
           onClick={() => void downloadCsv()}
           disabled={exporting || !data?.total_rows}
           className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 disabled:opacity-50"
         >
-          <Download size={16} /> {exporting ? "Exporting..." : "Export CSV"}
+          <Download size={16} /> {exporting ? t("report.exporting") : t("report.exportCsv")}
         </button>
         <p className="basis-full text-xs text-gray-500">
-          Dates and times are in {APP_TIMEZONE_CITY} time
-          {searchTooShort && " · Type at least 2 characters to search"}
+          {t("report.timezoneNote", { city: APP_TIMEZONE_CITY })}
+          {searchTooShort && ` · ${t("report.searchTooShort")}`}
         </p>
       </div>
 
-      {(error || exportError) && (
+      {shownError && (
         <p role="alert" className="rounded-lg bg-rose-50 p-4 text-sm text-rose-700">
-          {error || exportError}
+          {t(shownError.key, shownError.values)}
         </p>
       )}
 
       <div
         className={`grid gap-4 transition-opacity sm:grid-cols-3 ${loading && data ? "opacity-60" : ""}`}
       >
-        <Summary label="Work periods" value={data ? data.totals.periods : "—"} />
-        <Summary label="Total hours" value={data ? data.totals.hours.toFixed(2) : "—"} />
+        <Summary label={t("report.periods")} value={data ? data.totals.periods : "—"} />
+        <Summary label={t("report.totalHours")} value={data ? data.totals.hours.toFixed(2) : "—"} />
         <Summary
-          label="Total earnings"
+          label={t("report.totalEarnings")}
           value={data ? `€${data.totals.earnings.toFixed(2)}` : "—"}
         />
       </div>
@@ -389,24 +406,9 @@ export default function AttendanceReport({ token }: { token: string }) {
         <table className="min-w-[1640px] w-full text-left text-sm">
           <thead className="bg-gray-50 text-xs uppercase text-gray-500">
             <tr>
-              {[
-                "Worker",
-                "Site",
-                "Work date",
-                "Arrival",
-                "Paid start",
-                "Waiting (min)",
-                "Late (min)",
-                "Lunch start",
-                "Lunch end",
-                "Lunch (min)",
-                "Break (min)",
-                "Finished",
-                "Hours",
-                "Earned",
-              ].map((heading) => (
+              {COLUMNS.map((heading) => (
                 <th key={heading} className="px-4 py-3 font-semibold">
-                  {heading}
+                  {t(heading)}
                 </th>
               ))}
             </tr>
@@ -419,17 +421,17 @@ export default function AttendanceReport({ token }: { token: string }) {
                   <div className="text-xs text-gray-500">{shift.username}</div>
                 </td>
                 <td className="px-4 py-3">{shift.building_name || "—"}</td>
-                <td className="px-4 py-3">{String(shift.work_date).slice(0, 10)}</td>
-                <td className="px-4 py-3">{formatAppDateTime(shift.arrival_at)}</td>
-                <td className="px-4 py-3">{formatAppDateTime(shift.paid_start_at)}</td>
+                <td className="px-4 py-3">{formatWorkDate(shift.work_date, language)}</td>
+                <td className="px-4 py-3">{formatAppDateTime(shift.arrival_at, language)}</td>
+                <td className="px-4 py-3">{formatAppDateTime(shift.paid_start_at, language)}</td>
                 <td className="px-4 py-3 tabular-nums">{shift.waiting_minutes ?? "—"}</td>
                 <td className="px-4 py-3 tabular-nums">{shift.lateness_minutes ?? "—"}</td>
-                <td className="px-4 py-3">{formatAppDateTime(shift.lunch_start_time)}</td>
-                <td className="px-4 py-3">{formatAppDateTime(shift.lunch_end_time)}</td>
+                <td className="px-4 py-3">{formatAppDateTime(shift.lunch_start_time, language)}</td>
+                <td className="px-4 py-3">{formatAppDateTime(shift.lunch_end_time, language)}</td>
                 <td className="px-4 py-3 tabular-nums">{lunchMinutesOf(shift) ?? "—"}</td>
                 <td className="px-4 py-3 tabular-nums">{breakMinutesOf(shift) ?? "—"}</td>
                 <td className="whitespace-nowrap px-4 py-3">
-                  {formatAppDateTime(shift.end_work_time)}
+                  {formatAppDateTime(shift.end_work_time, language)}
                   {shift.auto_closed && <AutoClosedBadge />}
                 </td>
                 <td className="px-4 py-3">
@@ -443,16 +445,14 @@ export default function AttendanceReport({ token }: { token: string }) {
             {!data && (
               <tr>
                 <td colSpan={COLUMN_COUNT} className="px-4 py-12 text-center text-gray-500">
-                  {loading ? "Loading report..." : "The report could not be loaded."}
+                  {loading ? t("report.loadingReport") : t("report.loadFailed")}
                 </td>
               </tr>
             )}
             {data && data.rows.length === 0 && (
               <tr>
                 <td colSpan={COLUMN_COUNT} className="px-4 py-12 text-center text-gray-500">
-                  {search
-                    ? "No shifts match your search"
-                    : "No attendance records in this date range."}
+                  {search ? t("report.noMatches") : t("report.empty")}
                 </td>
               </tr>
             )}
@@ -462,12 +462,10 @@ export default function AttendanceReport({ token }: { token: string }) {
 
       {data && data.total_rows > PAGE_SIZES[0] && (
         <nav
-          aria-label="Report pages"
+          aria-label={t("report.pagesLabel")}
           className="flex flex-wrap items-center justify-between gap-3 text-sm text-gray-600"
         >
-          <p>
-            {data.total_rows} {data.total_rows === 1 ? "row" : "rows"}
-          </p>
+          <p>{t("report.rows", { count: data.total_rows })}</p>
           {totalPages > 1 && (
             <div className="flex items-center gap-2">
               <button
@@ -475,22 +473,22 @@ export default function AttendanceReport({ token }: { token: string }) {
                 disabled={loading || shownPage <= 1}
                 className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-1.5 font-medium text-gray-700 disabled:opacity-50"
               >
-                <ChevronLeft size={16} /> Previous
+                <ChevronLeft size={16} /> {t("report.previous")}
               </button>
               <span className="px-2 tabular-nums">
-                Page {shownPage} of {totalPages}
+                {t("report.pageOf", { page: shownPage, total: totalPages })}
               </span>
               <button
                 onClick={() => setPage(shownPage + 1)}
                 disabled={loading || shownPage >= totalPages}
                 className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-1.5 font-medium text-gray-700 disabled:opacity-50"
               >
-                Next <ChevronRight size={16} />
+                {t("report.next")} <ChevronRight size={16} />
               </button>
             </div>
           )}
           <label className="flex items-center gap-2">
-            Rows per page
+            {t("report.rowsPerPage")}
             <select
               value={pageSize}
               disabled={loading}

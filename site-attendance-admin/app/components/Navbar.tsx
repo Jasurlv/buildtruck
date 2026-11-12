@@ -1,6 +1,8 @@
 "use client";
 
 import { Building2, Users, FileText, LogOut } from "lucide-react";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
+import { useTranslation } from "@/i18n";
 
 interface NavbarProps {
   currentTab: "overview" | "buildings" | "workers" | "reports";
@@ -15,6 +17,7 @@ export default function Navbar({
   setCurrentTab,
   onLogout,
 }: NavbarProps) {
+  const { t } = useTranslation();
   return (
     <header className="bg-white border-b border-gray-200 px-8 py-4 flex justify-between items-center shadow-sm">
       <div className="flex items-center gap-3">
@@ -23,11 +26,9 @@ export default function Navbar({
         </div>
         <div>
           <h1 className="text-lg font-bold tracking-tight text-gray-900">
-            Site Attendance Admin
+            {t("nav.title")}
           </h1>
-          <p className="text-xs text-gray-500">
-            Construction Operations & Geofence Control
-          </p>
+          <p className="text-xs text-gray-500">{t("nav.subtitle")}</p>
         </div>
       </div>
 
@@ -41,7 +42,7 @@ export default function Navbar({
                 : "text-gray-600 hover:text-gray-900"
             }`}
           >
-            Overview
+            {t("nav.overview")}
           </button>
           <button
             onClick={() => setCurrentTab("buildings")}
@@ -51,7 +52,7 @@ export default function Navbar({
                 : "text-gray-600 hover:text-gray-900"
             }`}
           >
-            <Building2 size={15} /> Buildings
+            <Building2 size={15} /> {t("nav.buildings")}
           </button>
           <button
             onClick={() => setCurrentTab("workers")}
@@ -61,7 +62,7 @@ export default function Navbar({
                 : "text-gray-600 hover:text-gray-900"
             }`}
           >
-            <Users size={15} /> Workers
+            <Users size={15} /> {t("nav.workers")}
           </button>
           <button
             onClick={() => setCurrentTab("reports")}
@@ -71,15 +72,17 @@ export default function Navbar({
                 : "text-gray-600 hover:text-gray-900"
             }`}
           >
-            <FileText size={15} /> Reports
+            <FileText size={15} /> {t("nav.reports")}
           </button>
         </div>
+
+        <LanguageSwitcher />
 
         <button
           onClick={onLogout}
           className="flex items-center gap-2 text-gray-500 hover:text-rose-600 font-medium text-sm px-3 py-2 rounded-xl hover:bg-rose-50 transition-colors"
         >
-          <LogOut size={16} /> Sign Out
+          <LogOut size={16} /> {t("nav.signOut")}
         </button>
       </div>
     </header>

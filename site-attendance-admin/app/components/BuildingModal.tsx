@@ -6,24 +6,31 @@ import "leaflet/dist/leaflet.css";
 import type { LeafletMouseEvent } from "leaflet";
 import { adminFetch } from "@/utils/api";
 import { geocodeAddress } from "@/utils/geocode";
+import { useTranslation, type TranslationKey, type TranslationValues } from "@/i18n";
+import {
+  MAX_RADIUS_METERS,
+  MIN_RADIUS_METERS,
+  errorTextOf,
+  readJson,
+  throwApiError,
+} from "@/i18n/apiErrors";
 
 // Wait this long after the last keystroke before searching (no search-as-you-type).
 const ADDRESS_SEARCH_DEBOUNCE_MS = 800;
 const ADDRESS_SEARCH_MIN_LENGTH = 4;
 
-// Same limits as the API. GPS can jump tens of meters indoors, so a smaller zone
-// would flag workers who are on site. Sites saved earlier with less must be raised.
-const MIN_RADIUS_METERS = 50;
-const MAX_RADIUS_METERS = 500;
-const RADIUS_HINT = `Allowed ${MIN_RADIUS_METERS}-${MAX_RADIUS_METERS} m (GPS can jump indoors)`;
+// Radius limits: the same as the API (MIN_RADIUS_METERS, MAX_RADIUS_METERS in
+// i18n/apiErrors.ts). GPS can jump tens of meters indoors, so a smaller zone would
+// flag workers who are on site. Sites saved earlier with less must be raised.
+const RADIUS_LIMITS = { min: MIN_RADIUS_METERS, max: MAX_RADIUS_METERS };
 
-function radiusError(radius: number): string | null {
+function radiusError(radius: number): { key: TranslationKey; values: TranslationValues } | null {
   if (Number.isInteger(radius) && radius >= MIN_RADIUS_METERS && radius <= MAX_RADIUS_METERS) {
     return null;
   }
   return Number.isInteger(radius) && radius > 0 && radius < MIN_RADIUS_METERS
-    ? `${radius} m is below the minimum. Raise it to at least ${MIN_RADIUS_METERS} m to save.`
-    : `Enter a whole number of meters from ${MIN_RADIUS_METERS} to ${MAX_RADIUS_METERS}.`;
+    ? { key: "buildingModal.radiusBelowMin", values: { radius, min: MIN_RADIUS_METERS } }
+    : { key: "buildingModal.radiusInvalid", values: RADIUS_LIMITS };
 }
 
 interface BuildingModalProps {
@@ -57,6 +64,7 @@ export default function BuildingModal({
   const circleRef = useRef<any>(null);
 
   const [addressSearchUnavailable, setAddressSearchUnavailable] = useState(false);
+  const { t } = useTranslation();
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchControllerRef = useRef<AbortController | null>(null);
 
@@ -222,7 +230,8 @@ export default function BuildingModal({
     }, ADDRESS_SEARCH_DEBOUNCE_MS);
   };
 
-  const currentRadiusError = radiusError(buildingForm.radius_meters);
+  const radiusProblem = radiusError(buildingForm.radius_meters);
+  const currentRadiusError = radiusProblem ? t(radiusProblem.key, radiusProblem.values) : null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -243,21 +252,19 @@ export default function BuildingModal({
       });
       if (!res.ok) {
         // The API explains what is wrong (e.g. the radius limits); show that.
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.error || "Error saving building site");
+        await throwApiError(res, await readJson(res));
       }
 
       showNotification(
-        buildingToEdit
-          ? "Building updated successfully!"
-          : "Building site added successfully!",
+        buildingToEdit ? t("buildingModal.updated") : t("buildingModal.created"),
         "success",
       );
       onSuccess();
       handleClose();
     } catch (err) {
+      const text = errorTextOf(err);
       showNotification(
-        err instanceof Error && err.message ? err.message : "Error saving building site",
+        text.key === "errors.generic" ? t("buildingModal.saveFailed") : t(text.key, text.values),
         "error",
       );
     }
@@ -271,17 +278,14 @@ export default function BuildingModal({
         <button
           onClick={handleClose}
           className="absolute top-6 right-6 text-gray-400 hover:text-gray-700 p-1.5 rounded-full bg-gray-50 transition-colors z-10"
+          aria-label={t("common.close")}
         >
           <X size={20} />
         </button>
         <h2 className="text-xl font-bold mb-1">
-          {buildingToEdit
-            ? "Edit Building Site"
-            : "Add Building Site & Geofence"}
+          {buildingToEdit ? t("buildingModal.editTitle") : t("buildingModal.addTitle")}
         </h2>
-        <p className="text-xs text-gray-500 mb-6">
-          Enter site details and adjust radius.
-        </p>
+        <p className="text-xs text-gray-500 mb-6">{t("buildingModal.subtitle")}</p>
 
         <form
           onSubmit={handleSubmit}
@@ -290,7 +294,7 @@ export default function BuildingModal({
           <div className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
-                Site Name
+                {t("buildingModal.name")}
               </label>
               <input
                 type="text"
@@ -304,7 +308,7 @@ export default function BuildingModal({
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
-                Address
+                {t("buildingModal.address")}
               </label>
               <div className="relative">
                 <Globe
@@ -328,8 +332,7 @@ export default function BuildingModal({
                   role="status"
                   className="mt-1 text-xs text-amber-700"
                 >
-                  Address search is unavailable right now. Click the map to place
-                  the pin.
+                  {t("buildingModal.addressUnavailable")}
                 </p>
               )}
             </div>
@@ -338,12 +341,12 @@ export default function BuildingModal({
                 htmlFor="building-radius"
                 className="block text-xs font-semibold text-gray-600 uppercase mb-1"
               >
-                Geofence Radius (meters)
+                {t("buildingModal.radius")}
               </label>
               <div className="flex items-center gap-3">
                 <input
                   type="range"
-                  aria-label="Geofence radius"
+                  aria-label={t("buildingModal.radiusAria")}
                   min={MIN_RADIUS_METERS}
                   max={MAX_RADIUS_METERS}
                   step="5"
@@ -387,7 +390,7 @@ export default function BuildingModal({
                 />
               </div>
               <p id="building-radius-hint" className="mt-1 text-xs text-gray-500">
-                {RADIUS_HINT}
+                {t("buildingModal.radiusHint", RADIUS_LIMITS)}
               </p>
               {currentRadiusError && (
                 <p role="alert" className="mt-1 text-xs text-rose-600">
@@ -401,19 +404,19 @@ export default function BuildingModal({
                 onClick={handleClose}
                 className="px-5 py-2.5 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-100"
               >
-                Cancel
+                {t("common.cancel")}
               </button>
               <button
                 type="submit"
                 className="px-6 py-2.5 rounded-xl text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
               >
-                {buildingToEdit ? "Update Building" : "Save Building Site"}
+                {buildingToEdit ? t("buildingModal.update") : t("buildingModal.save")}
               </button>
             </div>
           </div>
           <div className="space-y-2">
             <label className="block text-xs font-semibold text-gray-600 uppercase">
-              Live Geofence Boundary Preview
+              {t("buildingModal.preview")}
             </label>
             <div className="w-full h-[360px] rounded-2xl border border-gray-200 overflow-hidden shadow-inner relative z-0">
               <div ref={mapRef} className="w-full h-full" />
