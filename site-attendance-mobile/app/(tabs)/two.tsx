@@ -15,7 +15,11 @@ import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import { Directory, File } from "expo-file-system";
 import * as SecureStore from "expo-secure-store";
+import { useTranslation } from "react-i18next";
+import i18n from "../../i18n";
+import { formatDateTime } from "../../i18n/format";
 import { SessionExpiredError, workerFetch } from "../../utils/api";
+import { ServerError, errorText, readJson, throwServerError } from "../../utils/serverErrors";
 
 type ShiftRecord = {
   id: number;
@@ -34,15 +38,16 @@ type WorkerData = {
 
 type ExportAction = "download" | "share" | null;
 
+// Labels are looked up when shown, so they follow the selected language.
 const columns = [
-  { label: "Name", width: 130 },
-  { label: "Work started", width: 160 },
-  { label: "Lunch started", width: 150 },
-  { label: "Lunch ended", width: 150 },
-  { label: "Work finished", width: 160 },
-  { label: "Worked hours", width: 120 },
-  { label: "Earned", width: 120 },
-];
+  { key: "history.colName", width: 130 },
+  { key: "history.colWorkStarted", width: 160 },
+  { key: "history.colLunchStarted", width: 150 },
+  { key: "history.colLunchEnded", width: 150 },
+  { key: "history.colWorkFinished", width: 160 },
+  { key: "history.colWorkedHours", width: 120 },
+  { key: "history.colEarned", width: 120 },
+] as const;
 
 export default function HistoryScreen() {
   const [shifts, setShifts] = useState<ShiftRecord[]>([]);
@@ -50,6 +55,7 @@ export default function HistoryScreen() {
   const [error, setError] = useState<string | null>(null);
   const [exportAction, setExportAction] = useState<ExportAction>(null);
   const router = useRouter();
+  const { t } = useTranslation();
 
   const loadHistory = useCallback(async (isFocused: () => boolean) => {
     setLoading(true);
@@ -63,10 +69,8 @@ export default function HistoryScreen() {
 
       const worker: WorkerData = JSON.parse(workerDataString);
       const response = await workerFetch("/attendance/history");
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to load work history");
-      }
+      const data = await readJson(response);
+      if (!response.ok) throwServerError(response, data);
 
       if (isFocused()) setShifts(data.shifts || []);
     } catch (err) {
@@ -75,7 +79,9 @@ export default function HistoryScreen() {
       console.error(err);
       if (isFocused()) {
         setError(
-          err instanceof Error ? err.message : "Failed to load work history",
+          err instanceof ServerError
+            ? `${i18n.t("history.loadFailed")} ${err.message}`
+            : errorText(err),
         );
       }
     } finally {
@@ -109,9 +115,7 @@ export default function HistoryScreen() {
       const html = buildReportHtml(shifts, totalHours, totalEarned);
       if (Platform.OS === "web") {
         if (action === "share") {
-          throw new Error(
-            "Sharing a PDF file is available from the Android or iOS app.",
-          );
+          throw new Error(i18n.t("history.webShareUnavailable"));
         }
         await Print.printAsync({
           html,
@@ -130,11 +134,11 @@ export default function HistoryScreen() {
 
       if (action === "share") {
         if (!(await Sharing.isAvailableAsync())) {
-          throw new Error("PDF sharing is not available on this device.");
+          throw new Error(i18n.t("history.sharingUnavailable"));
         }
         await Sharing.shareAsync(uri, {
           mimeType: "application/pdf",
-          dialogTitle: "Share work report",
+          dialogTitle: i18n.t("history.shareDialogTitle"),
           UTI: ".pdf",
         });
       } else {
@@ -142,7 +146,7 @@ export default function HistoryScreen() {
         const fileName = createReportFileName();
         const destination = directory.createFile(fileName, "application/pdf");
         await new File(uri).copy(destination, { overwrite: true });
-        Alert.alert("Report saved", `PDF saved to ${directory.name}.`);
+        Alert.alert(i18n.t("history.savedTitle"), i18n.t("history.saved", { folder: directory.name }));
       }
     } catch (err) {
       if (
@@ -153,8 +157,8 @@ export default function HistoryScreen() {
       }
       console.error(err);
       Alert.alert(
-        action === "download" ? "Unable to save report" : "Unable to share report",
-        err instanceof Error ? err.message : "Please try again.",
+        action === "download" ? i18n.t("history.saveFailedTitle") : i18n.t("history.shareFailedTitle"),
+        err instanceof Error && err.message ? err.message : i18n.t("errors.generic"),
       );
     } finally {
       setExportAction(null);
@@ -166,31 +170,29 @@ export default function HistoryScreen() {
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.header}>
           <View>
-            <Text style={styles.title}>Work history</Text>
-            <Text style={styles.subtitle}>
-              Completed work periods and earnings
-            </Text>
+            <Text style={styles.title}>{t("history.title")}</Text>
+            <Text style={styles.subtitle}>{t("history.subtitle")}</Text>
           </View>
           <TouchableOpacity
             onPress={() => void loadHistory(() => true)}
             style={styles.refreshButton}
             accessibilityRole="button"
           >
-            <Text style={styles.refreshText}>Refresh</Text>
+            <Text style={styles.refreshText}>{t("common.refresh")}</Text>
           </TouchableOpacity>
         </View>
 
         <View style={styles.summaryRow}>
           <View style={styles.summaryCard}>
-            <Text style={styles.summaryLabel}>Work periods</Text>
+            <Text style={styles.summaryLabel}>{t("history.periods")}</Text>
             <Text style={styles.summaryValue}>{shifts.length}</Text>
           </View>
           <View style={styles.summaryCard}>
-            <Text style={styles.summaryLabel}>Total hours</Text>
+            <Text style={styles.summaryLabel}>{t("history.totalHours")}</Text>
             <Text style={styles.summaryValue}>{totalHours.toFixed(2)}</Text>
           </View>
           <View style={styles.summaryCard}>
-            <Text style={styles.summaryLabel}>Total earned</Text>
+            <Text style={styles.summaryLabel}>{t("history.totalEarned")}</Text>
             <Text style={[styles.summaryValue, styles.earnedValue]}>
               €{totalEarned.toFixed(2)}
             </Text>
@@ -212,7 +214,7 @@ export default function HistoryScreen() {
             {exportAction === "download" ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.exportButtonText}>Download PDF</Text>
+              <Text style={styles.exportButtonText}>{t("history.downloadPdf")}</Text>
             )}
           </TouchableOpacity>
           <TouchableOpacity
@@ -229,7 +231,7 @@ export default function HistoryScreen() {
             {exportAction === "share" ? (
               <ActivityIndicator color="#4f46e5" />
             ) : (
-              <Text style={styles.shareButtonText}>Share PDF</Text>
+              <Text style={styles.shareButtonText}>{t("history.sharePdf")}</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -237,7 +239,7 @@ export default function HistoryScreen() {
         {loading ? (
           <View style={styles.messageContainer}>
             <ActivityIndicator size="large" color="#4f46e5" />
-            <Text style={styles.messageText}>Loading work history...</Text>
+            <Text style={styles.messageText}>{t("history.loading")}</Text>
           </View>
         ) : error ? (
           <View style={styles.messageContainer}>
@@ -246,14 +248,12 @@ export default function HistoryScreen() {
               onPress={() => void loadHistory(() => true)}
               style={styles.retryButton}
             >
-              <Text style={styles.retryText}>Try again</Text>
+              <Text style={styles.retryText}>{t("common.tryAgain")}</Text>
             </TouchableOpacity>
           </View>
         ) : shifts.length === 0 ? (
           <View style={styles.messageContainer}>
-            <Text style={styles.messageText}>
-              Finished work periods will appear here.
-            </Text>
+            <Text style={styles.messageText}>{t("history.empty")}</Text>
           </View>
         ) : (
           <View style={styles.tableCard}>
@@ -262,10 +262,10 @@ export default function HistoryScreen() {
                 <View style={styles.tableRow}>
                   {columns.map((column) => (
                     <Text
-                      key={column.label}
+                      key={column.key}
                       style={[styles.headerCell, { width: column.width }]}
                     >
-                      {column.label}
+                      {t(column.key)}
                     </Text>
                   ))}
                 </View>
@@ -296,7 +296,7 @@ export default function HistoryScreen() {
                 ))}
                 <View style={[styles.tableRow, styles.totalRow]}>
                   <Text style={[styles.totalCell, { width: columns[0].width + columns[1].width + columns[2].width + columns[3].width + columns[4].width }]}>
-                    TOTAL
+                    {t("history.total")}
                   </Text>
                   <Text style={[styles.totalCell, { width: columns[5].width }]}>
                     {totalHours.toFixed(2)}
@@ -307,27 +307,12 @@ export default function HistoryScreen() {
                 </View>
               </View>
             </ScrollView>
-            <Text style={styles.tableHint}>
-              Scroll horizontally to view all columns.
-            </Text>
+            <Text style={styles.tableHint}>{t("history.scrollHint")}</Text>
           </View>
         )}
       </ScrollView>
     </SafeAreaView>
   );
-}
-
-function formatDateTime(value: string | null) {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 function createReportFileName() {
@@ -365,7 +350,7 @@ function buildReportHtml(
 
   return `
     <!doctype html>
-    <html>
+    <html lang="${i18n.language}">
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <style>
@@ -381,18 +366,18 @@ function buildReportHtml(
         </style>
       </head>
       <body>
-        <h1>Work history report</h1>
-        <p>Generated ${escapeHtml(formatDateTime(new Date().toISOString()))}</p>
+        <h1>${escapeHtml(i18n.t("history.reportTitle"))}</h1>
+        <p>${escapeHtml(i18n.t("history.generated", { date: formatDateTime(new Date().toISOString()) }))}</p>
         <table>
           <thead>
             <tr>
-              ${columns.map((column) => `<th>${column.label}</th>`).join("")}
+              ${columns.map((column) => `<th>${escapeHtml(i18n.t(column.key))}</th>`).join("")}
             </tr>
           </thead>
           <tbody>${rows}</tbody>
           <tfoot>
             <tr>
-              <td colspan="5">TOTAL</td>
+              <td colspan="5">${escapeHtml(i18n.t("history.total"))}</td>
               <td>${totalHours.toFixed(2)}</td>
               <td>€${totalEarned.toFixed(2)}</td>
             </tr>

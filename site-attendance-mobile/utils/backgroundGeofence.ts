@@ -3,6 +3,7 @@ import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import * as TaskManager from "expo-task-manager";
+import i18n, { languageReady } from "../i18n";
 import { serverNow } from "./serverClock";
 import { ensureNotificationChannel, immediateAlertTrigger } from "./notificationChannel";
 import { isExpoGo } from "./runtime";
@@ -98,10 +99,12 @@ if (!TaskManager.isTaskDefined(LOCATION_TASK)) {
       );
 
       if (!inside && previous?.inside !== false) {
+        // The task can run with no screen open: load the worker's language first.
+        await languageReady;
         await Notifications.scheduleNotificationAsync({
           content: {
-            title: "Workplace location check",
-            body: `You appear to be outside the workplace zone (${Math.round(distance)} m away).`,
+            title: i18n.t("notifications.outsideTitle"),
+            body: i18n.t("notifications.outsideBody", { distance: Math.round(distance) }),
           },
           // Shown now, on the alerts channel (a channelId inside `content` is ignored).
           trigger: immediateAlertTrigger(),
@@ -162,8 +165,9 @@ export async function startBackgroundGeofenceMonitoring(): Promise<BackgroundSta
         foregroundService:
           Platform.OS === "android"
             ? {
-                notificationTitle: "TimeTrack shift tracking",
-                notificationBody: "Checking your workplace location during your active shift.",
+                // Fixed when tracking starts; a language change applies from the next shift.
+                notificationTitle: i18n.t("notifications.trackingTitle"),
+                notificationBody: i18n.t("notifications.trackingBody"),
                 killServiceOnDestroy: false,
               }
             : undefined,

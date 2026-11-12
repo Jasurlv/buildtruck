@@ -12,9 +12,10 @@ import {
 import Constants from "expo-constants";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
+import { useTranslation } from "react-i18next";
+import LanguagePicker from "../../components/LanguagePicker";
 import { SessionExpiredError, workerFetch } from "../../utils/api";
 import { resetOnboarding } from "../../utils/onboarding";
-import { strings } from "../../constants/strings";
 import { stopBackgroundGeofenceMonitoring } from "../../utils/backgroundGeofence";
 
 type WorkerProfile = {
@@ -32,6 +33,7 @@ export default function ProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [loggingOut, setLoggingOut] = useState(false);
   const router = useRouter();
+  const { t } = useTranslation();
 
   const loadWorkerInfo = useCallback(async (isFocused: () => boolean) => {
     try {
@@ -46,15 +48,12 @@ export default function ProfileScreen() {
     } catch (err) {
       console.error("Failed to load worker profile:", err);
       if (isFocused()) {
-        Alert.alert(
-          "Unable to load profile",
-          "Please sign in again to reload your account details.",
-        );
+        Alert.alert(t("profile.loadFailedTitle"), t("profile.loadFailed"));
       }
     } finally {
       if (isFocused()) setLoading(false);
     }
-  }, [router]);
+  }, [router, t]);
 
   useFocusEffect(
     useCallback(() => {
@@ -67,10 +66,10 @@ export default function ProfileScreen() {
   );
 
   const handleLogout = () => {
-    Alert.alert("Log out", "Are you sure you want to log out?", [
-      { text: "Cancel", style: "cancel" },
+    Alert.alert(t("profile.logOutConfirmTitle"), t("profile.logOutConfirm"), [
+      { text: t("common.cancel"), style: "cancel" },
       {
-        text: "Log Out",
+        text: t("profile.logOut"),
         style: "destructive",
         onPress: async () => {
           setLoggingOut(true);
@@ -81,10 +80,7 @@ export default function ProfileScreen() {
             }
             const { activeShift } = await response.json();
             if (activeShift) {
-              Alert.alert(
-                "Shift in progress",
-                "Finish your active shift before logging out.",
-              );
+              Alert.alert(t("profile.shiftInProgressTitle"), t("profile.shiftInProgress"));
               return;
             }
             await stopBackgroundGeofenceMonitoring();
@@ -98,10 +94,7 @@ export default function ProfileScreen() {
           } catch (err) {
             if (err instanceof SessionExpiredError) return;
             console.error("Failed to clear login data:", err);
-            Alert.alert(
-              "Unable to log out",
-              "Please try again. Your current shift has not been ended.",
-            );
+            Alert.alert(t("profile.logOutFailedTitle"), t("profile.logOutFailed"));
           } finally {
             setLoggingOut(false);
           }
@@ -126,10 +119,8 @@ export default function ProfileScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.screenHeader}>Profile</Text>
-        <Text style={styles.screenSubtitle}>
-          Your account and assigned workplace
-        </Text>
+        <Text style={styles.screenHeader}>{t("profile.title")}</Text>
+        <Text style={styles.screenSubtitle}>{t("profile.subtitle")}</Text>
 
         <View style={styles.identityCard}>
           <View style={styles.avatar}>
@@ -138,53 +129,59 @@ export default function ProfileScreen() {
             </Text>
           </View>
           <View style={styles.identityText}>
-            <Text style={styles.workerName}>{worker?.full_name || "Worker"}</Text>
+            <Text style={styles.workerName}>{worker?.full_name || t("profile.worker")}</Text>
             <Text style={styles.workerUsername}>
-              {worker?.username ? `@${worker.username}` : "Worker account"}
+              {worker?.username ? `@${worker.username}` : t("profile.workerAccount")}
             </Text>
           </View>
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Account details</Text>
+          <Text style={styles.cardTitle}>{t("profile.accountDetails")}</Text>
           <ProfileRow
-            label="Hourly rate"
+            label={t("profile.hourlyRate")}
             value={
               Number.isFinite(hourlyRate)
-                ? `€${hourlyRate.toFixed(2)} / hr`
-                : "Not set"
+                ? t("units.perHour", { rate: hourlyRate.toFixed(2) })
+                : t("profile.notSet")
             }
           />
+          <LanguagePicker variant="row" />
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Assigned workplace</Text>
-          <ProfileRow label="Site" value={worker?.building_name || "Unassigned"} />
+          <Text style={styles.cardTitle}>{t("profile.assignedWorkplace")}</Text>
           <ProfileRow
-            label="Address"
-            value={
-              worker?.building_address ||
-              worker?.address ||
-              "No address available"
-            }
+            label={t("profile.site")}
+            value={worker?.building_name || t("profile.unassigned")}
           />
           <ProfileRow
-            label="Geofence radius"
-            value={Number.isFinite(radius) ? `${radius} m` : "Not set"}
+            label={t("profile.address")}
+            value={worker?.building_address || worker?.address || t("profile.noAddress")}
+          />
+          <ProfileRow
+            label={t("profile.radius")}
+            value={
+              Number.isFinite(radius) ? t("units.meters", { count: radius }) : t("profile.notSet")
+            }
             last
           />
         </View>
 
         <View style={styles.helpCard}>
-          <Text style={styles.helpTitle}>Need help?</Text>
-          <Text style={styles.helpText}>
-            Contact your site administrator about account details, pay rate, or
-            your assigned workplace.
-          </Text>
+          <Text style={styles.helpTitle}>{t("profile.needHelp")}</Text>
+          <Text style={styles.helpText}>{t("profile.helpText")}</Text>
+          <TouchableOpacity
+            style={styles.contactButton}
+            onPress={() => router.push("/contact")}
+            accessibilityRole="button"
+          >
+            <Text style={styles.contactButtonText}>✉️ {t("profile.contact")}</Text>
+          </TouchableOpacity>
         </View>
 
         <Text style={styles.versionText}>
-          TimeTrack · Version {Constants.expoConfig?.version || "1.0.0"}
+          {t("profile.version", { version: Constants.expoConfig?.version || "1.0.0" })}
         </Text>
 
         <TouchableOpacity
@@ -196,7 +193,7 @@ export default function ProfileScreen() {
           {loggingOut ? (
             <ActivityIndicator color="#dc2626" />
           ) : (
-            <Text style={styles.logoutButtonText}>Log Out</Text>
+            <Text style={styles.logoutButtonText}>{t("profile.logOut")}</Text>
           )}
         </TouchableOpacity>
 
@@ -209,7 +206,7 @@ export default function ProfileScreen() {
           }}
           accessibilityRole="button"
         >
-          <Text style={styles.devLinkText}>{strings.showOnboardingAgain}</Text>
+          <Text style={styles.devLinkText}>{t("profile.showOnboardingAgain")}</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
@@ -295,6 +292,14 @@ const styles = StyleSheet.create({
   },
   helpTitle: { fontSize: 15, fontWeight: "700", color: "#1f2937", marginBottom: 6 },
   helpText: { color: "#6b7280", fontSize: 13, lineHeight: 19 },
+  contactButton: {
+    marginTop: 12,
+    backgroundColor: "#4f46e5",
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  contactButtonText: { color: "#ffffff", fontSize: 15, fontWeight: "700" },
   versionText: { textAlign: "center", color: "#9ca3af", fontSize: 12, marginBottom: 14 },
   logoutButton: {
     backgroundColor: "#fee2e2",

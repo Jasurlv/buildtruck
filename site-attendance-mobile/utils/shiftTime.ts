@@ -163,11 +163,7 @@ export function lunchOptions(rules: ShiftRules): number[] {
   return options;
 }
 
-/** "7h 5m" */
-export function formatDuration(ms: number): string {
-  const totalMinutes = Math.floor(Math.max(0, ms) / 60_000);
-  return `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`;
-}
+// Durations in words ("7h 5m", "7 ч 5 мин") are formatted in i18n/format.ts.
 
 /** Countdown: "14:05" (mm:ss), or "1:02:03" from an hour up. */
 export function formatCountdown(ms: number): string {

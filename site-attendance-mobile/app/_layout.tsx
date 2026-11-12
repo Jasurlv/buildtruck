@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { AppState } from "react-native";
 import { Stack, useRouter, useSegments } from "expo-router";
+// Initialises the app language before any screen renders.
+import "../i18n";
 import { hasCompletedOnboarding } from "../utils/onboarding";
 import { isGateExemptRoute, shouldOpenPermissionGate } from "../utils/permissionGate";
 import { checkPermissionGate } from "../utils/permissions";
@@ -71,6 +73,9 @@ export default function RootLayout() {
 
         {/* Main Tab Bar Screen */}
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+
+        {/* Contact / Report a problem (from the Profile screen) */}
+        <Stack.Screen name="contact" options={{ headerShown: false }} />
       </Stack>
     </>
   );

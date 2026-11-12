@@ -14,9 +14,13 @@ import * as Location from "expo-location";
 import * as SecureStore from "expo-secure-store";
 import { useRouter, useFocusEffect } from "expo-router";
 import MapView, { Marker, Circle } from "react-native-maps";
+import { useTranslation } from "react-i18next";
+import i18n from "../../i18n";
+import { hoursText } from "../../i18n/format";
+import LanguagePicker from "../../components/LanguagePicker";
 import { SessionExpiredError, workerFetch } from "../../utils/api";
+import { errorText, readJson, throwServerError } from "../../utils/serverErrors";
 import type { ShiftRules } from "../../utils/shiftTime";
-import { strings } from "../../constants/strings";
 import { checkPermissionGate } from "../../utils/permissions";
 import {
   getLocationPermission,
@@ -57,9 +61,9 @@ function showAutoClosedNotice(data: {
     }
   };
   Alert.alert(
-    strings.autoClosedTitle,
-    strings.autoClosedMessage(hours),
-    [{ text: strings.ok, onPress: () => void acknowledge() }],
+    i18n.t("shift.autoClosedTitle"),
+    i18n.t("shift.autoClosedMessage", { duration: hoursText(hours) }),
+    [{ text: i18n.t("common.ok"), onPress: () => void acknowledge() }],
     { cancelable: false },
   );
 }
@@ -88,6 +92,7 @@ export default function AttendanceScreen() {
     null,
   );
   const router = useRouter();
+  const { t } = useTranslation();
 
   // useFocusEffect runs every time you navigate back to the Today tab
   useFocusEffect(
@@ -233,24 +238,24 @@ export default function AttendanceScreen() {
   };
 
   const showLocationRequiredAlert = () => {
-    const message = `TimeTrack needs your location to confirm you are at ${
-      worker?.building_name || "your assigned building"
-    } when you start work.`;
+    const message = t("today.locationRequiredMessage", {
+      building: worker?.building_name || t("today.yourBuilding"),
+    });
     if (locationPermission === "blocked") {
       Alert.alert(
-        "Location permission required",
-        `${message}\n\nTurn on location for TimeTrack in Settings.`,
+        t("today.locationRequiredTitle"),
+        `${message}\n\n${t("today.turnOnInSettings")}`,
         [
-          { text: "Cancel", style: "cancel" },
-          { text: "Open Settings", onPress: () => void openAppSettings() },
+          { text: t("common.cancel"), style: "cancel" },
+          { text: t("common.openSettings"), onPress: () => void openAppSettings() },
         ],
       );
       return;
     }
-    Alert.alert("Location permission required", message, [
-      { text: "Cancel", style: "cancel" },
+    Alert.alert(t("today.locationRequiredTitle"), message, [
+      { text: t("common.cancel"), style: "cancel" },
       {
-        text: "Allow",
+        text: t("today.allow"),
         onPress: async () => {
           const permission = await requestLocationPermission();
           updateLocationPermission(permission.state);
@@ -273,10 +278,10 @@ export default function AttendanceScreen() {
     // the app opened. Say what is wrong instead of failing later.
     const gate = await checkPermissionGate();
     if (!gate.canContinue) {
-      Alert.alert(strings.permissions.startWorkTitle, strings.permissions.startWorkMessage, [
-        { text: strings.cancel, style: "cancel" },
+      Alert.alert(t("permissions.startWorkTitle"), t("permissions.startWorkMessage"), [
+        { text: t("common.cancel"), style: "cancel" },
         {
-          text: strings.permissions.fix,
+          text: t("permissions.fix"),
           onPress: () =>
             router.push({ pathname: "/permissions", params: { returnTo: "back" } }),
         },
@@ -290,7 +295,7 @@ export default function AttendanceScreen() {
     }
 
     if (!worker || !currentLocation) {
-      Alert.alert("Error", "GPS location not acquired yet.");
+      Alert.alert(t("today.gpsNotReadyTitle"), t("today.gpsNotReady"));
       return;
     }
 
@@ -304,33 +309,17 @@ export default function AttendanceScreen() {
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to start work");
+      const data = await readJson(res);
+      if (!res.ok) throwServerError(res, data);
 
       setActiveShift(data.log);
       router.push("/shift-active");
-    } catch (err: any) {
+    } catch (err) {
       if (err instanceof SessionExpiredError) return;
-      Alert.alert("Action Failed", err.message || "Server connection error");
+      Alert.alert(t("today.startFailedTitle"), errorText(err));
     } finally {
       setActionLoading(false);
     }
-  };
-
-  const handleLogout = async () => {
-    if (activeShift) {
-      Alert.alert(
-        "Shift in progress",
-        "Finish your active shift before logging out.",
-      );
-      return;
-    }
-    await SecureStore.deleteItemAsync("worker_data");
-    await SecureStore.deleteItemAsync("worker_token");
-    await SecureStore.deleteItemAsync("shift_lunch_paused");
-    locationSubscription.current?.remove();
-    locationSubscription.current = null;
-    router.replace("/login");
   };
 
   if (loading) {
@@ -355,39 +344,33 @@ export default function AttendanceScreen() {
       >
         {/* Header Grid */}
         <View style={styles.headerGrid}>
-          <Text style={styles.nameText}>{worker?.full_name}</Text>
-          <View style={styles.headerRightContainer}>
-            <View style={styles.rateBadge}>
-              <Text style={styles.rateText}>
-                €{worker?.hourly_rate || "6.25"} / hr
-              </Text>
-            </View>
-            <TouchableOpacity
-              onPress={handleLogout}
-              style={styles.logoutButton}
-            >
-              <Text style={styles.logoutButtonText}>Logout</Text>
-            </TouchableOpacity>
-          </View>
+          <Text style={styles.nameText} numberOfLines={1}>
+            {worker?.full_name}
+          </Text>
+          <LanguagePicker variant="compact" />
         </View>
 
         {/* Today's Schedule Card */}
         <View style={styles.scheduleCard}>
-          <Text style={styles.scheduleTitle}>Today's schedule</Text>
+          <Text style={styles.scheduleTitle}>{t("today.scheduleTitle")}</Text>
 
           <View style={styles.scheduleRow}>
-            <Text style={styles.scheduleLabel}>Arrive, change clothes</Text>
-            <Text style={styles.scheduleTime}>by {schedule?.arrive_by ?? "–"}</Text>
+            <Text style={styles.scheduleLabel}>{t("today.arrive")}</Text>
+            <Text style={styles.scheduleTime}>
+              {t("today.byTime", { time: schedule?.arrive_by ?? "–" })}
+            </Text>
           </View>
 
           <View style={styles.scheduleRow}>
-            <Text style={styles.scheduleLabel}>Work starts</Text>
+            <Text style={styles.scheduleLabel}>{t("today.workStarts")}</Text>
             <Text style={styles.scheduleTime}>{schedule?.work_start ?? "–"}</Text>
           </View>
 
           <View style={styles.scheduleRow}>
             <Text style={styles.scheduleLabel}>
-              Lunch ({rules ? `${rules.lunch_min_minutes}–${rules.lunch_max_minutes} min` : "–"})
+              {rules
+                ? t("today.lunch", { min: rules.lunch_min_minutes, max: rules.lunch_max_minutes })
+                : t("today.lunchNoRules")}
             </Text>
             <Text style={styles.scheduleTime}>
               {rules ? `${rules.lunch_opens_local}–${rules.lunch_latest_start_local}` : "–"}
@@ -395,7 +378,7 @@ export default function AttendanceScreen() {
           </View>
 
           <View style={[styles.scheduleRow, { borderBottomWidth: 0 }]}>
-            <Text style={styles.scheduleLabel}>Work ends</Text>
+            <Text style={styles.scheduleLabel}>{t("today.workEnds")}</Text>
             <Text style={styles.scheduleTime}>18:00</Text>
           </View>
         </View>
@@ -403,16 +386,14 @@ export default function AttendanceScreen() {
         {/* Building Details Card */}
         <View style={styles.buildingCard}>
           <Text style={styles.buildingTitle}>
-            {worker?.building_name || "Unassigned Site"}
+            {worker?.building_name || t("today.unassignedSite")}
           </Text>
           <Text style={styles.buildingAddress}>
-            {worker?.building_address ||
-              worker?.address ||
-              "No location address available"}
+            {worker?.building_address || worker?.address || t("today.noAddress")}
           </Text>
           <View style={styles.infoRow}>
             <Text style={styles.infoBadge}>
-              Radius: {worker?.radius_meters || 30}m (+70m buffer)
+              {t("today.radius", { radius: worker?.radius_meters || 30 })}
             </Text>
             <Text
               style={[
@@ -421,10 +402,12 @@ export default function AttendanceScreen() {
               ]}
             >
               {locationMissing
-                ? "● Location off"
+                ? t("today.statusLocationOff")
                 : isInsideGeofence
-                  ? "● On the place"
-                  : `● ${distance !== null ? `${distance}m away` : "Locating..."}`}
+                  ? t("today.statusOnSite")
+                  : distance !== null
+                    ? t("today.statusAway", { distance })
+                    : t("today.statusLocating")}
             </Text>
           </View>
         </View>
@@ -438,10 +421,12 @@ export default function AttendanceScreen() {
         >
           <Text style={styles.distanceBannerText}>
             {locationMissing
-              ? "Location permission is required to start work"
+              ? t("today.bannerLocationRequired")
               : isInsideGeofence
-                ? "You are on the place"
-                : `You are far from work ${distance !== null ? `${distance} meters` : "calculating..."}`}
+                ? t("today.bannerOnSite")
+                : distance !== null
+                  ? t("today.bannerFar", { distance })
+                  : t("today.bannerCalculating")}
           </Text>
         </View>
 
@@ -464,22 +449,20 @@ export default function AttendanceScreen() {
             </MapView>
           ) : locationMissing ? (
             <View style={styles.mapPlaceholder}>
-              <Text style={styles.mapLoadingText}>Location access is off</Text>
+              <Text style={styles.mapLoadingText}>{t("today.mapLocationOff")}</Text>
               <TouchableOpacity
                 onPress={showLocationRequiredAlert}
                 style={styles.enableLocationButton}
               >
                 <Text style={styles.enableLocationButtonText}>
-                  Turn on location
+                  {t("today.turnOnLocation")}
                 </Text>
               </TouchableOpacity>
             </View>
           ) : (
             <View style={styles.mapPlaceholder}>
               <ActivityIndicator color="#4f46e5" />
-              <Text style={styles.mapLoadingText}>
-                Acquiring GPS location...
-              </Text>
+              <Text style={styles.mapLoadingText}>{t("today.acquiringGps")}</Text>
             </View>
           )}
         </View>
@@ -507,7 +490,7 @@ export default function AttendanceScreen() {
               <ActivityIndicator color="#fff" />
             ) : (
               <Text style={styles.punchButtonText}>
-                {activeShift ? "WORKING" : "START WORK"}
+                {activeShift ? t("today.working") : t("today.startWork")}
               </Text>
             )}
           </TouchableOpacity>
@@ -535,22 +518,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 12,
   },
-  nameText: { fontSize: 22, fontWeight: "bold", color: "#111827" },
-  headerRightContainer: { flexDirection: "row", alignItems: "center", gap: 8 },
-  rateBadge: {
-    backgroundColor: "#e0e7ff",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-  },
-  rateText: { color: "#4f46e5", fontWeight: "bold", fontSize: 13 },
-  logoutButton: {
-    backgroundColor: "#fee2e2",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 12,
-  },
-  logoutButtonText: { color: "#dc2626", fontWeight: "bold", fontSize: 12 },
+  nameText: { flex: 1, marginRight: 12, fontSize: 22, fontWeight: "bold", color: "#111827" },
   scheduleCard: {
     backgroundColor: "#ffffff",
     borderRadius: 16,

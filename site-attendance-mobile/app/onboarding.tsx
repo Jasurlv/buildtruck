@@ -2,18 +2,23 @@ import React, { useState } from "react";
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { strings } from "../constants/strings";
+import { useTranslation } from "react-i18next";
+import LanguagePicker from "../components/LanguagePicker";
 import { markOnboardingCompleted } from "../utils/onboarding";
 
-const t = strings.onboarding;
-const STEPS = t.steps;
-const LAST_STEP = STEPS.length - 1;
+// One icon per intro page; the text is in i18n/locales (onboarding.steps).
+const ICONS = ["🏗️", "📍"];
+const LAST_STEP = ICONS.length - 1;
+
+type Step = { title: string; body: string; points: string[] };
 
 // Intro pages shown on first launch. They always lead to the Permissions screen,
 // which the worker must pass before logging in (Skip only skips the pages).
 export default function OnboardingScreen() {
   const router = useRouter();
+  const { t } = useTranslation();
   const [step, setStep] = useState(0);
+  const steps = t("onboarding.steps", { returnObjects: true }) as Step[];
 
   const finish = async () => {
     try {
@@ -24,19 +29,20 @@ export default function OnboardingScreen() {
     router.replace("/permissions");
   };
 
-  const current = STEPS[step];
+  const current = steps[step];
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.topBar}>
+        <LanguagePicker variant="compact" />
         <TouchableOpacity onPress={() => void finish()} hitSlop={12} accessibilityRole="button">
-          <Text style={styles.skipText}>{t.skip}</Text>
+          <Text style={styles.skipText}>{t("onboarding.skip")}</Text>
         </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.iconContainer}>
-          <Text style={styles.iconText}>{current.icon}</Text>
+          <Text style={styles.iconText}>{ICONS[step]}</Text>
         </View>
         <Text style={styles.title}>{current.title}</Text>
         <Text style={styles.body}>{current.body}</Text>
@@ -50,8 +56,8 @@ export default function OnboardingScreen() {
 
       <View style={styles.footer}>
         <View style={styles.dots}>
-          {STEPS.map((s, index) => (
-            <View key={s.title} style={[styles.dot, index === step && styles.dotActive]} />
+          {ICONS.map((icon, index) => (
+            <View key={icon} style={[styles.dot, index === step && styles.dotActive]} />
           ))}
         </View>
         <TouchableOpacity
@@ -59,7 +65,9 @@ export default function OnboardingScreen() {
           onPress={() => (step < LAST_STEP ? setStep(step + 1) : void finish())}
           accessibilityRole="button"
         >
-          <Text style={styles.primaryButtonText}>{step < LAST_STEP ? t.next : t.continue}</Text>
+          <Text style={styles.primaryButtonText}>
+            {step < LAST_STEP ? t("onboarding.next") : t("onboarding.continue")}
+          </Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -73,7 +81,8 @@ const styles = StyleSheet.create({
   },
   topBar: {
     flexDirection: "row",
-    justifyContent: "flex-end",
+    justifyContent: "space-between",
+    alignItems: "center",
     paddingHorizontal: 24,
     paddingTop: 8,
     minHeight: 32,

@@ -14,16 +14,18 @@ import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import { useFocusEffect, useRouter } from "expo-router";
+import { useTranslation } from "react-i18next";
 import LunchModal from "../components/LunchModal";
-import { strings } from "../constants/strings";
+import i18n from "../i18n";
+import { formatDuration, formatLongDate, minutesText } from "../i18n/format";
 import { SessionExpiredError, workerFetch } from "../utils/api";
+import { errorText, readJson, throwServerError } from "../utils/serverErrors";
 import { serverNow } from "../utils/serverClock";
 import { ALERTS_CHANNEL_ID, ensureNotificationChannel } from "../utils/notificationChannel";
 import {
   computeShiftStatus,
   formatClock,
   formatCountdown,
-  formatDuration,
   lunchAvailability,
   lunchOptions,
   startedOnEarlierDay,
@@ -46,19 +48,17 @@ let lunchReminder: { shiftId: number | undefined; atMs: number; notificationId: 
 // not every time this screen opens.
 let backgroundNoticeShown = false;
 
-const BACKGROUND_NOTICES: Partial<Record<BackgroundStartResult, string>> = {
-  "expo-go":
-    "Background location needs the installed TimeTrack app (development build). In Expo Go, your location is checked while the app is open.",
-  "permission-denied":
-    "Location checks will run only while the app is open. Enable background location permission for checks while using other apps.",
-  failed: "Location checks will run only while the app is open.",
-};
+const BACKGROUND_NOTICES = {
+  "expo-go": "shift.backgroundExpoGo",
+  "permission-denied": "shift.backgroundPermissionDenied",
+  failed: "shift.backgroundFailed",
+} as const satisfies Partial<Record<BackgroundStartResult, string>>;
 
 function showBackgroundNoticeOnce(result: BackgroundStartResult): void {
-  const message = BACKGROUND_NOTICES[result];
-  if (!message || backgroundNoticeShown) return;
+  const key = BACKGROUND_NOTICES[result as keyof typeof BACKGROUND_NOTICES];
+  if (!key || backgroundNoticeShown) return;
   backgroundNoticeShown = true;
-  Alert.alert("Background location unavailable", message);
+  Alert.alert(i18n.t("shift.backgroundUnavailableTitle"), i18n.t(key));
 }
 
 async function clearLunchReminder(): Promise<void> {
@@ -93,6 +93,7 @@ export default function ActiveShiftScreen() {
   const [todayLocal, setTodayLocal] = useState<string | null>(null);
 
   const router = useRouter();
+  const { t } = useTranslation();
   const locationSubscription = useRef<Location.LocationSubscription | null>(
     null,
   );
@@ -203,10 +204,7 @@ export default function ActiveShiftScreen() {
   const startGeofenceTracking = async (workerData: any) => {
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert(
-        "Permission Denied",
-        "Location access is required for shift verification.",
-      );
+      Alert.alert(i18n.t("shift.permissionDeniedTitle"), i18n.t("shift.permissionDenied"));
       return;
     }
 
@@ -270,8 +268,8 @@ export default function ActiveShiftScreen() {
     if (!inside && !outsideAlertShown.current) {
       outsideAlertShown.current = true;
       Alert.alert(
-        "Geofence Warning",
-        `You have moved outside the workplace radius! Current distance: ${Math.round(dist)}m`,
+        i18n.t("shift.outsideTitle"),
+        i18n.t("shift.outsideMessage", { distance: Math.round(dist) }),
       );
     } else if (inside) {
       outsideAlertShown.current = false;
@@ -327,9 +325,10 @@ export default function ActiveShiftScreen() {
     try {
       await ensureNotificationChannel();
       notificationId = await Notifications.scheduleNotificationAsync({
+        // Written now, in the language selected now.
         content: {
-          title: "Lunch reminder",
-          body: `Start your lunch in the app before ${rules?.lunch_latest_start_local ?? "the window closes"}.`,
+          title: t("shift.lunchReminderTitle"),
+          body: t("shift.lunchReminderBody", { time: rules?.lunch_latest_start_local ?? "–" }),
         },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
@@ -351,10 +350,10 @@ export default function ActiveShiftScreen() {
         method: "POST",
         body: JSON.stringify({ minutes }),
       });
-      const data = await response.json();
+      const data = await readJson(response);
       if (!response.ok) {
         void loadShift(); // the server's view of the shift wins
-        throw new Error(data.error || "Unable to start lunch");
+        throwServerError(response, data, rules);
       }
       await clearLunchReminder();
       setIsLunchModalOpen(false);
@@ -362,10 +361,7 @@ export default function ActiveShiftScreen() {
     } catch (err) {
       if (err instanceof SessionExpiredError) return;
       setIsLunchModalOpen(false);
-      Alert.alert(
-        "Unable to start lunch",
-        err instanceof Error ? err.message : "Server connection error",
-      );
+      Alert.alert(t("shift.lunchFailedTitle"), errorText(err));
     } finally {
       setIsLunchSubmitting(false);
     }
@@ -375,37 +371,34 @@ export default function ActiveShiftScreen() {
   // server records the break; the screen follows its answer.
   const handleToggleBreak = async () => {
     const resuming = phase === "break";
-    const failureTitle = resuming ? strings.breakEndFailed : strings.breakStartFailed;
+    const failureTitle = resuming ? t("shift.breakEndFailed") : t("shift.breakStartFailed");
     setIsBreakSubmitting(true);
     try {
       const response = await workerFetch(`/attendance/break/${resuming ? "end" : "start"}`, {
         method: "POST",
       });
-      const data = await response.json();
+      const data = await readJson(response);
       if (!response.ok) {
         void loadShift(); // e.g. already changed on another phone: the server's view wins
-        throw new Error(data.error || failureTitle);
+        throwServerError(response, data, rules);
       }
       applyShift(data.log, data.rules, data.today_local);
     } catch (err) {
       if (err instanceof SessionExpiredError) return;
-      Alert.alert(failureTitle, err instanceof Error ? err.message : strings.connectionError);
+      Alert.alert(failureTitle, errorText(err));
     } finally {
       setIsBreakSubmitting(false);
     }
   };
 
   const handleFinishWork = () => {
-    Alert.alert("Finish Work", "Are you sure you want to finish your shift?", [
-      { text: "Cancel", style: "cancel" },
+    Alert.alert(t("shift.finishConfirmTitle"), t("shift.finishConfirm"), [
+      { text: t("common.cancel"), style: "cancel" },
       {
-        text: "Finish",
+        text: t("shift.finish"),
         onPress: async () => {
           if (!worker?.id) {
-            Alert.alert(
-              "Unable to finish work",
-              "Worker information is missing.",
-            );
+            Alert.alert(t("shift.finishFailedTitle"), t("shift.workerMissing"));
             return;
           }
           setIsFinishing(true);
@@ -413,16 +406,14 @@ export default function ActiveShiftScreen() {
             const res = await workerFetch("/attendance/end-work", {
               method: "POST",
             });
-            const data = await res.json();
-            if (res.status === 404 && data.code === "NO_ACTIVE_SHIFT") {
+            const data = await readJson(res);
+            if (res.status === 404 && data?.code === "NO_ACTIVE_SHIFT") {
               // Closed meanwhile (e.g. automatically after the maximum length):
               // reloading returns to the home screen, which explains what happened.
               void loadShift();
               return;
             }
-            if (!res.ok) {
-              throw new Error(data.error || "Failed to finish work");
-            }
+            if (!res.ok) throwServerError(res, data, rules);
 
             locationSubscription.current?.remove();
             locationSubscription.current = null;
@@ -450,17 +441,11 @@ export default function ActiveShiftScreen() {
                 "Work was completed, but background tracking did not stop:",
                 trackingError,
               );
-              Alert.alert(
-                "Work finished",
-                "Your shift was saved, but background location tracking could not be stopped. Please restart the app or contact your administrator.",
-              );
+              Alert.alert(t("shift.finishedTitle"), t("shift.trackingNotStopped"));
             }
-          } catch (err: any) {
+          } catch (err) {
             if (err instanceof SessionExpiredError) return;
-            Alert.alert(
-              "Unable to finish work",
-              err.message || "Server connection error",
-            );
+            Alert.alert(t("shift.finishFailedTitle"), errorText(err));
           } finally {
             setIsFinishing(false);
           }
@@ -488,7 +473,6 @@ export default function ActiveShiftScreen() {
       status.paidStartAt.getTime() - arrivalMs > allowanceMinutes * 60_000);
   const minutesLeft = isChanging ? Math.max(1, Math.ceil(status.msUntilPaidStart / 60_000)) : 0;
   const changingMinutes = isLongWait ? minutesLeft : (allowanceMinutes ?? 0);
-  const minutesWord = (n: number) => `${n} ${n === 1 ? "minute" : "minutes"}`;
 
   // A running shift from an earlier day (sites' calendar, server time): probably a
   // missed Finish tap, so the running estimate would be misleading.
@@ -498,11 +482,13 @@ export default function ActiveShiftScreen() {
   const showBreakButton = phase === "working" || onBreak;
   const breakMinutesSoFar = status ? Math.floor(status.breakMs / 60_000) : 0;
 
-  let lunchButtonText = "Start lunch";
+  let lunchButtonText = t("shift.startLunch");
   if (availability === "before") {
-    lunchButtonText = `Lunch available from ${rules?.lunch_opens_local}`;
+    lunchButtonText = t("shift.lunchAvailableFrom", { time: rules?.lunch_opens_local ?? "–" });
   } else if (availability === "closed") {
-    lunchButtonText = `Lunch window closed: ${rules?.lunch_default_deduction_minutes} minutes will be deducted automatically`;
+    lunchButtonText = t("shift.lunchWindowClosed", {
+      duration: minutesText(rules?.lunch_default_deduction_minutes ?? 0),
+    });
   }
 
   return (
@@ -514,15 +500,15 @@ export default function ActiveShiftScreen() {
             style={styles.backButton}
             onPress={() => router.replace("/(tabs)")}
           >
-            <Text style={styles.backButtonText}>← Back Home</Text>
+            <Text style={styles.backButtonText}>{t("shift.backHome")}</Text>
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Shift in Progress</Text>
+          <Text style={styles.headerTitle}>{t("shift.title")}</Text>
         </View>
 
         {isStaleShift && shift?.work_date && (
           <View style={styles.staleBanner} accessibilityRole="alert">
             <Text style={styles.staleBannerText}>
-              ⚠️ {strings.staleShiftWarning(strings.formatDate(shift.work_date))}
+              ⚠️ {t("shift.staleWarning", { date: formatLongDate(shift.work_date) })}
             </Text>
           </View>
         )}
@@ -531,13 +517,13 @@ export default function ActiveShiftScreen() {
           <View style={styles.changingIntro}>
             <Text style={styles.changingHeading} accessibilityRole="header">
               {isLongWait
-                ? `You have ${minutesWord(changingMinutes)} before work starts`
-                : `You have ${minutesWord(changingMinutes)} to change clothes`}
+                ? t("shift.changingLong", { duration: minutesText(changingMinutes) })
+                : t("shift.changingShort", { duration: minutesText(changingMinutes) })}
             </Text>
             <Text style={styles.changingText}>
               {isLongWait
-                ? `Your paid time starts at ${paidStartLabel}. Use the time to change clothes and get ready.`
-                : "Get ready for work. Your paid time starts automatically when the countdown ends."}
+                ? t("shift.changingLongText", { time: paidStartLabel })
+                : t("shift.changingShortText")}
             </Text>
           </View>
         )}
@@ -545,59 +531,65 @@ export default function ActiveShiftScreen() {
         {/* Location Tracking Banner */}
         <View style={[styles.trackingBanner, onLunch && styles.pausedBanner]}>
           <Text style={[styles.trackingText, onLunch && styles.pausedText]}>
-            {onLunch
-              ? "⏸️ On Lunch Break (Geofence Paused)"
-              : "🟢 Location Tracking On (Checking every 5 min)"}
+            {onLunch ? t("shift.trackingLunch") : t("shift.trackingOn")}
           </Text>
           <Text style={styles.subTrackingText}>
             {onLunch
-              ? "You are free to leave the area"
+              ? t("shift.freeToLeave")
               : isInsideGeofence
-                ? "Inside workplace zone"
-                : `⚠️ Outside zone (${distance}m away)`}
+                ? t("shift.insideZone")
+                : t("shift.outsideZone", { distance })}
           </Text>
         </View>
 
         {/* Time Block: derived from the server timestamps and server time */}
         <View style={styles.timeCard}>
           {!status ? (
-            <Text style={styles.timeCardHeader}>Loading shift…</Text>
+            <Text style={styles.timeCardHeader}>{t("shift.loading")}</Text>
           ) : phase === "changing" ? (
             <>
-              <Text style={styles.timeCardHeader}>👷 Changing clothes</Text>
+              <Text style={styles.timeCardHeader}>{t("shift.changingClothes")}</Text>
               <Text style={styles.timeCardElapsed}>
                 {formatCountdown(status.msUntilPaidStart)}
               </Text>
-              <Text style={styles.statusLabel}>Paid time starts at {paidStartLabel}</Text>
+              <Text style={styles.statusLabel}>
+                {t("shift.paidStartsAt", { time: paidStartLabel })}
+              </Text>
             </>
           ) : phase === "lunch" ? (
             <>
-              <Text style={styles.timeCardHeader}>🍽️ On lunch until {lunchEndLabel}</Text>
+              <Text style={styles.timeCardHeader}>
+                {t("shift.onLunchUntil", { time: lunchEndLabel })}
+              </Text>
               <Text style={styles.timeCardElapsed}>
                 {formatCountdown(status.msUntilLunchEnd)}
               </Text>
-              <Text style={styles.statusLabel}>Paid time resumes automatically</Text>
+              <Text style={styles.statusLabel}>{t("shift.paidResumes")}</Text>
             </>
           ) : phase === "break" ? (
             <>
               <Text style={styles.timeCardHeader}>
-                {strings.onBreakSince(label(shift?.open_break?.local_started, status.breakStartedAt))}
+                {t("shift.onBreakSince", {
+                  time: label(shift?.open_break?.local_started, status.breakStartedAt),
+                })}
               </Text>
               <Text style={styles.timeCardElapsed}>
                 {formatCountdown(status.breakElapsedMs)}
               </Text>
-              <Text style={styles.statusLabel}>⏸️ {strings.breakPaused}</Text>
+              <Text style={styles.statusLabel}>⏸️ {t("shift.breakPaused")}</Text>
               <Text style={styles.pausedSubLabel}>
-                {strings.paidSoFar(formatDuration(status.workedMs))}
+                {t("shift.paidSoFar", { duration: formatDuration(status.workedMs) })}
               </Text>
             </>
           ) : (
             <>
-              <Text style={styles.timeCardHeader}>Paid time since {paidStartLabel}</Text>
+              <Text style={styles.timeCardHeader}>
+                {t("shift.paidSince", { time: paidStartLabel })}
+              </Text>
               <Text style={styles.timeCardElapsed}>
                 {formatDuration(status.workedMs)}
               </Text>
-              <Text style={styles.statusLabel}>▶️ Working</Text>
+              <Text style={styles.statusLabel}>{t("shift.working")}</Text>
             </>
           )}
         </View>
@@ -605,16 +597,16 @@ export default function ActiveShiftScreen() {
         {/* Estimated Earnings Block */}
         {phase !== "changing" && (
           <View style={styles.earningsCard}>
-            <Text style={styles.earningsTitle}>Earned so far (estimated)</Text>
+            <Text style={styles.earningsTitle}>{t("shift.earnedSoFar")}</Text>
             <Text style={styles.earningsAmount}>
               {isStaleShift
-                ? strings.noEstimate
+                ? "-"
                 : estimatedEarnings !== null
                   ? `€${estimatedEarnings}`
                   : "–"}
             </Text>
             <Text style={styles.rateSubtext}>
-              Rate: €{hourlyRate} / hr · final amount is calculated when you finish
+              {t("shift.rateNote", { rate: hourlyRate })}
             </Text>
           </View>
         )}
@@ -622,20 +614,26 @@ export default function ActiveShiftScreen() {
         {/* Lunch: one per shift, chosen length, no early end */}
         {phase === "working" && rules && !hasTakenLunch && availability !== "closed" && (
           <View style={styles.reminderCard}>
-            <Text style={styles.reminderTitle}>🍽️ Lunch</Text>
+            <Text style={styles.reminderTitle}>{t("shift.lunchTitle")}</Text>
             <Text style={styles.reminderText}>
-              Start lunch between {rules.lunch_opens_local} and {rules.lunch_latest_start_local}.
-              Choose {rules.lunch_min_minutes}–{rules.lunch_max_minutes} minutes.
+              {t("shift.lunchInfo", {
+                from: rules.lunch_opens_local,
+                to: rules.lunch_latest_start_local,
+                min: rules.lunch_min_minutes,
+                max: rules.lunch_max_minutes,
+              })}
             </Text>
           </View>
         )}
         {phase === "working" && hasTakenLunch && (
           <Text style={styles.lunchDoneText}>
-            Lunch taken ({shift?.lunch_minutes ?? "?"} min, until {lunchEndLabel})
+            {t("shift.lunchTaken", { minutes: shift?.lunch_minutes ?? "?", time: lunchEndLabel })}
           </Text>
         )}
         {phase === "working" && breakMinutesSoFar > 0 && (
-          <Text style={styles.lunchDoneText}>{strings.breaksToday(breakMinutesSoFar)}</Text>
+          <Text style={styles.lunchDoneText}>
+            {t("shift.breaksThisShift", { duration: minutesText(breakMinutesSoFar) })}
+          </Text>
         )}
 
         {/* Control Buttons */}
@@ -664,11 +662,11 @@ export default function ActiveShiftScreen() {
               <Text style={styles.breakButtonText}>
                 {isBreakSubmitting
                   ? onBreak
-                    ? strings.resumingWork
-                    : strings.startingBreak
+                    ? t("shift.resumingWork")
+                    : t("shift.startingBreak")
                   : onBreak
-                    ? `▶️ ${strings.resumeWork}`
-                    : `☕ ${strings.takeBreak}`}
+                    ? `▶️ ${t("shift.resumeWork")}`
+                    : `☕ ${t("shift.takeBreak")}`}
               </Text>
             </TouchableOpacity>
           )}
@@ -682,7 +680,7 @@ export default function ActiveShiftScreen() {
               disabled={isFinishing}
             >
               <Text style={styles.finishButtonText}>
-                {isFinishing ? "Finishing..." : "Finish Work"}
+                {isFinishing ? t("shift.finishing") : t("shift.finishWork")}
               </Text>
             </TouchableOpacity>
           )}
@@ -715,15 +713,16 @@ type FinishedShift = {
 };
 
 function lunchNote({ lunchMinutes, lunchType }: FinishedShift): string {
+  const duration = minutesText(Math.round(lunchMinutes));
   switch (lunchType) {
     case "default":
-      return `No lunch was recorded, so ${lunchMinutes} minutes were deducted.`;
+      return i18n.t("summary.lunchDefault", { duration });
     case "elapsed":
-      return `You finished during lunch, so only the ${lunchMinutes} minutes taken were deducted.`;
+      return i18n.t("summary.lunchElapsed", { duration });
     case "recorded":
-      return `Your ${lunchMinutes}-minute lunch was deducted.`;
+      return i18n.t("summary.lunchRecorded", { duration });
     default:
-      return "No lunch was deducted.";
+      return i18n.t("summary.lunchNone");
   }
 }
 
@@ -735,24 +734,25 @@ function FinishedSummary({
   finished: FinishedShift;
   onDone: () => void;
 }) {
+  const { t } = useTranslation();
   const { log } = finished;
   const times = log.local_times ?? {};
   const at = (value: string | null | undefined) => (value ? new Date(value) : null);
   const rows: [string, string][] = [
-    ["Arrival", label(times.arrival, at(log.arrival_at ?? log.punch_in_time))],
-    ["Paid start", label(times.paid_start, at(log.paid_start_at))],
-    ["Finished", label(times.finish, at(log.end_work_time))],
-    ["Lunch", `${finished.lunchMinutes} min`],
-    [strings.breaksRow, strings.minutesShort(Math.round(finished.breakMinutes))],
-    ["Paid hours", `${finished.workedHours.toFixed(2)} h`],
+    [t("summary.arrival"), label(times.arrival, at(log.arrival_at ?? log.punch_in_time))],
+    [t("summary.paidStart"), label(times.paid_start, at(log.paid_start_at))],
+    [t("summary.finished"), label(times.finish, at(log.end_work_time))],
+    [t("summary.lunch"), t("units.minutesShort", { count: finished.lunchMinutes })],
+    [t("summary.breaks"), t("units.minutesShort", { count: Math.round(finished.breakMinutes) })],
+    [t("summary.paidHours"), t("units.hoursShort", { value: finished.workedHours.toFixed(2) })],
   ];
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.summaryTitle}>Work day finished</Text>
+        <Text style={styles.summaryTitle}>{t("summary.title")}</Text>
 
         <View style={styles.timeCard}>
-          <Text style={styles.timeCardHeader}>Paid hours</Text>
+          <Text style={styles.timeCardHeader}>{t("summary.paidHours")}</Text>
           <Text style={styles.timeCardElapsed}>
             {formatDuration(finished.workedHours * 3_600_000)}
           </Text>
@@ -769,12 +769,12 @@ function FinishedSummary({
         </View>
 
         <View style={styles.earningsCard}>
-          <Text style={styles.earningsTitle}>Earned today</Text>
+          <Text style={styles.earningsTitle}>{t("summary.earnedToday")}</Text>
           <Text style={styles.earningsAmount}>€{finished.earned.toFixed(2)}</Text>
         </View>
 
         <TouchableOpacity style={styles.doneButton} onPress={onDone}>
-          <Text style={styles.doneButtonText}>Done</Text>
+          <Text style={styles.doneButtonText}>{t("summary.done")}</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>

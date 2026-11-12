@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useTranslation } from "react-i18next";
+import { minutesText } from "../i18n/format";
 
 type LunchModalProps = {
   options: number[];
@@ -27,18 +29,19 @@ export default function LunchModal({
   onClose,
 }: LunchModalProps) {
   const [minutes, setMinutes] = useState(defaultMinutes);
+  const { t } = useTranslation();
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
         {/* Tapping the dimmed area closes it; it sits behind the sheet, so taps
             inside the sheet never reach it. */}
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel={t("common.close")} />
         {/* The sheet scrolls when it is taller than the screen (small phones). */}
         <View style={styles.sheet}>
           <ScrollView contentContainerStyle={styles.sheetContent} bounces={false}>
-            <Text style={styles.title}>Start lunch</Text>
-            <Text style={styles.subtitle}>How long will your lunch be?</Text>
+            <Text style={styles.title}>{t("lunchModal.title")}</Text>
+            <Text style={styles.subtitle}>{t("lunchModal.question")}</Text>
 
             <View style={styles.options}>
               {options.map((option) => {
@@ -54,15 +57,16 @@ export default function LunchModal({
                     <Text style={[styles.optionText, selected && styles.optionTextSelected]}>
                       {option}
                     </Text>
-                    <Text style={[styles.optionUnit, selected && styles.optionTextSelected]}>min</Text>
+                    <Text style={[styles.optionUnit, selected && styles.optionTextSelected]}>
+                      {t("lunchModal.minUnit")}
+                    </Text>
                   </TouchableOpacity>
                 );
               })}
             </View>
 
             <Text style={styles.note}>
-              A shorter lunch means more paid time. Once you confirm, the lunch cannot be
-              shortened or ended early: paid time resumes automatically after {minutes} minutes.
+              {t("lunchModal.note", { duration: minutesText(minutes) })}
             </Text>
 
             <TouchableOpacity
@@ -71,19 +75,19 @@ export default function LunchModal({
               disabled={submitting}
             >
               <Text style={styles.confirmText}>
-                {submitting ? "Starting..." : `Start ${minutes}-minute lunch`}
+                {submitting ? t("lunchModal.starting") : t("lunchModal.confirm", { minutes })}
               </Text>
             </TouchableOpacity>
 
             {canRemind && (
               <TouchableOpacity style={styles.secondaryButton} onPress={onRemind}>
-                <Text style={styles.secondaryText}>Remind me in 15 minutes</Text>
+                <Text style={styles.secondaryText}>{t("lunchModal.remind")}</Text>
               </TouchableOpacity>
             )}
-            <Text style={styles.hint}>Lunch can be started until {latestStartLabel}.</Text>
+            <Text style={styles.hint}>{t("lunchModal.hint", { time: latestStartLabel })}</Text>
 
             <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
-              <Text style={styles.cancelText}>Cancel</Text>
+              <Text style={styles.cancelText}>{t("common.cancel")}</Text>
             </TouchableOpacity>
           </ScrollView>
         </View>

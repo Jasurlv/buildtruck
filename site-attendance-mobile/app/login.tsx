@@ -11,19 +11,18 @@ import {
   Platform,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import {
-  SESSION_EXPIRED_MESSAGE,
-  SESSION_EXPIRED_REASON,
-  getApiBaseUrl,
-  startWorkerSession,
-} from "../utils/api";
+import { useTranslation } from "react-i18next";
+import LanguagePicker from "../components/LanguagePicker";
+import { SESSION_EXPIRED_REASON, getApiBaseUrl, startWorkerSession } from "../utils/api";
 import { checkPermissionGate } from "../utils/permissions";
+import { errorText, readJson, throwServerError } from "../utils/serverErrors";
 
 export default function LoginScreen() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const { t } = useTranslation();
   const { reason } = useLocalSearchParams<{ reason?: string }>();
   const sessionExpired = reason === SESSION_EXPIRED_REASON;
 
@@ -37,7 +36,7 @@ export default function LoginScreen() {
 
   const handleLogin = async () => {
     if (!username || !password) {
-      Alert.alert("Error", "Please enter both username and password.");
+      Alert.alert(t("login.missingTitle"), t("errors.missingCredentials"));
       return;
     }
 
@@ -49,19 +48,16 @@ export default function LoginScreen() {
         body: JSON.stringify({ username, password }),
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to login");
-      }
+      const data = await readJson(response);
+      if (!response.ok) throwServerError(response, data);
 
       // Securely store the token and worker details
       await startWorkerSession(data.token, data.worker);
 
       // Redirect to the main tabs dashboard
       router.replace("/(tabs)");
-    } catch (err: any) {
-      Alert.alert("Login Failed", err.message || "Server connection error");
+    } catch (err) {
+      Alert.alert(t("login.failedTitle"), errorText(err));
     } finally {
       setLoading(false);
     }
@@ -72,24 +68,28 @@ export default function LoginScreen() {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       style={styles.container}
     >
+      {/* The worker may not read the phone's language: let them switch before signing in. */}
+      <View style={styles.languageRow}>
+        <LanguagePicker variant="compact" />
+      </View>
       <View style={styles.card}>
         <View style={styles.iconContainer}>
           <Text style={styles.iconText}>🏗️</Text>
         </View>
-        <Text style={styles.title}>TimeTrack</Text>
-        <Text style={styles.subtitle}>Worker sign in</Text>
+        <Text style={styles.title}>{t("login.title")}</Text>
+        <Text style={styles.subtitle}>{t("login.subtitle")}</Text>
 
         {sessionExpired && (
           <View style={styles.noticeBanner} accessibilityRole="alert">
-            <Text style={styles.noticeText}>{SESSION_EXPIRED_MESSAGE}</Text>
+            <Text style={styles.noticeText}>{t("errors.sessionExpired")}</Text>
           </View>
         )}
 
         <View style={styles.inputContainer}>
-          <Text style={styles.label}>Username</Text>
+          <Text style={styles.label}>{t("login.username")}</Text>
           <TextInput
             style={styles.input}
-            placeholder="Enter your username"
+            placeholder={t("login.usernamePlaceholder")}
             placeholderTextColor="#9ca3af"
             autoCapitalize="none"
             value={username}
@@ -98,7 +98,7 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.inputContainer}>
-          <Text style={styles.label}>Password</Text>
+          <Text style={styles.label}>{t("login.password")}</Text>
           <TextInput
             style={styles.input}
             placeholder="••••••••"
@@ -117,7 +117,7 @@ export default function LoginScreen() {
           {loading ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.buttonText}>Sign In</Text>
+            <Text style={styles.buttonText}>{t("login.signIn")}</Text>
           )}
         </TouchableOpacity>
       </View>
@@ -126,6 +126,7 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
+  languageRow: { flexDirection: "row", justifyContent: "flex-end", marginBottom: 12 },
   container: {
     flex: 1,
     backgroundColor: "#f3f4f6",

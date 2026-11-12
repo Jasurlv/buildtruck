@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import { Tabs, useRouter } from "expo-router";
 import { SymbolView } from "expo-symbols";
+import { useTranslation } from "react-i18next";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const TAB_COUNT = 3;
@@ -16,6 +17,7 @@ const TAB_WIDTH = SCREEN_WIDTH / TAB_COUNT;
 
 function CustomTabBar({ state }: any) {
   const router = useRouter();
+  const { t } = useTranslation();
   const translateX = useRef(
     new Animated.Value(state.index * TAB_WIDTH),
   ).current;
@@ -47,9 +49,9 @@ function CustomTabBar({ state }: any) {
 
       {state.routes.map((route: any, index: number) => {
         const isFocused = state.index === index;
-        let label = "Today";
-        if (route.name === "two") label = "History";
-        if (route.name === "profile") label = "Profile";
+        let label = t("tabs.today");
+        if (route.name === "two") label = t("tabs.history");
+        if (route.name === "profile") label = t("tabs.profile");
 
         const onPress = () => {
           if (!isFocused) {
@@ -95,14 +97,15 @@ function CustomTabBar({ state }: any) {
 }
 
 export default function TabLayout() {
+  const { t } = useTranslation();
   return (
     <Tabs
       tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{ headerShown: false }}
     >
-      <Tabs.Screen name="index" options={{ title: "Today" }} />
-      <Tabs.Screen name="two" options={{ title: "History" }} />
-      <Tabs.Screen name="profile" options={{ title: "Profile" }} />
+      <Tabs.Screen name="index" options={{ title: t("tabs.today") }} />
+      <Tabs.Screen name="two" options={{ title: t("tabs.history") }} />
+      <Tabs.Screen name="profile" options={{ title: t("tabs.profile") }} />
     </Tabs>
   );
 }

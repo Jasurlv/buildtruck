@@ -14,7 +14,9 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { strings } from "../constants/strings";
+import { useTranslation } from "react-i18next";
+import i18n from "../i18n";
+import LanguagePicker from "../components/LanguagePicker";
 import {
   routeAfterPermissions,
   type GateItem,
@@ -31,8 +33,8 @@ import {
   requestPreciseLocation,
 } from "../utils/permissions";
 
-const t = strings.permissions;
 const platform = Platform.OS;
+const isIos = platform === "ios";
 
 const REQUESTS: Record<PermissionKey, () => Promise<void>> = {
   location: requestPreciseLocation,
@@ -40,37 +42,64 @@ const REQUESTS: Record<PermissionKey, () => Promise<void>> = {
   notifications: requestNotifications,
 };
 
-function guideSteps(guide: Guide): readonly string[] {
+/** A list of lines from the translation file (steps, bullets). */
+function lines(key: string): string[] {
+  const value = i18n.t(key as "permissions.disclosure", { returnObjects: true }) as unknown;
+  return Array.isArray(value) ? (value as string[]) : [];
+}
+
+function guideKey(guide: Guide): string | null {
   switch (guide) {
     case "androidAllTheTime":
-      return t.guides.androidAllTheTime;
+      return "permissions.guideAndroidAllTheTime";
     case "iosAlways":
-      return t.guides.iosAlways;
+      return "permissions.guideIosAlways";
     case "preciseLocation":
-      return t.guides.preciseLocation(platform);
+      return isIos ? "permissions.guidePreciseIos" : "permissions.guidePreciseAndroid";
     case "settingsLocation":
-      return t.guides.settingsLocation(platform);
+      return isIos ? "permissions.guideSettingsLocationIos" : "permissions.guideSettingsLocationAndroid";
     case "settingsBackground":
-      return t.guides.settingsBackground(platform);
+      return isIos
+        ? "permissions.guideSettingsBackgroundIos"
+        : "permissions.guideSettingsBackgroundAndroid";
     case "settingsNotifications":
-      return t.guides.settingsNotifications(platform);
+      return isIos
+        ? "permissions.guideSettingsNotificationsIos"
+        : "permissions.guideSettingsNotificationsAndroid";
     default:
-      return [];
+      return null;
   }
+}
+
+function guideSteps(guide: Guide): string[] {
+  const key = guideKey(guide);
+  return key ? lines(key) : [];
 }
 
 function itemText(key: PermissionKey): { title: string; reason: string; button: string } {
   switch (key) {
     case "location":
-      return t.location;
+      return {
+        title: i18n.t("permissions.locationTitle"),
+        reason: i18n.t("permissions.locationReason"),
+        button: i18n.t("permissions.locationButton"),
+      };
     case "backgroundLocation":
       return {
-        title: t.backgroundLocation.title(platform),
-        reason: t.backgroundLocation.reason,
-        button: t.backgroundLocation.button(platform),
+        title: isIos
+          ? i18n.t("permissions.backgroundTitleIos")
+          : i18n.t("permissions.backgroundTitleAndroid"),
+        reason: i18n.t("permissions.backgroundReason"),
+        button: isIos
+          ? i18n.t("permissions.backgroundButtonIos")
+          : i18n.t("permissions.backgroundButtonAndroid"),
       };
     case "notifications":
-      return t.notifications;
+      return {
+        title: i18n.t("permissions.notificationsTitle"),
+        reason: i18n.t("permissions.notificationsReason"),
+        button: i18n.t("permissions.notificationsButton"),
+      };
   }
 }
 
@@ -82,6 +111,8 @@ function itemText(key: PermissionKey): { title: string; reason: string; button: 
  */
 export default function PermissionsScreen() {
   const router = useRouter();
+  // Re-renders this screen and its cards when the language changes.
+  const { t } = useTranslation();
   const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
   const [gate, setGate] = useState<GateState | null>(null);
   const [hasSession, setHasSession] = useState(false);
@@ -127,9 +158,9 @@ export default function PermissionsScreen() {
       await REQUESTS[item.key]();
     } catch {
       // Expected on some phones (e.g. the OS refuses to show the dialog): guide to Settings.
-      Alert.alert(t.requestFailedTitle, t.requestFailed, [
-        { text: strings.cancel, style: "cancel" },
-        { text: t.openSettings, onPress: openSettings },
+      Alert.alert(t("permissions.requestFailedTitle"), t("permissions.requestFailed"), [
+        { text: t("common.cancel"), style: "cancel" },
+        { text: t("common.openSettings"), onPress: openSettings },
       ]);
     } finally {
       setBusy(null);
@@ -159,14 +190,17 @@ export default function PermissionsScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.title} accessibilityRole="header">
-          {t.title}
-        </Text>
-        <Text style={styles.intro}>{t.intro}</Text>
+        <View style={styles.titleRow}>
+          <Text style={styles.title} accessibilityRole="header">
+            {t("permissions.title")}
+          </Text>
+          <LanguagePicker variant="compact" />
+        </View>
+        <Text style={styles.intro}>{t("permissions.intro")}</Text>
 
         <View style={styles.disclosure}>
-          <Text style={styles.disclosureTitle}>{t.disclosureTitle}</Text>
-          {t.disclosure.map((line) => (
+          <Text style={styles.disclosureTitle}>{t("permissions.disclosureTitle")}</Text>
+          {lines("permissions.disclosure").map((line) => (
             <View key={line} style={styles.bulletRow}>
               <Text style={styles.bullet}>•</Text>
               <Text style={styles.disclosureText}>{line}</Text>
@@ -191,9 +225,9 @@ export default function PermissionsScreen() {
 
         {platform === "android" && (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>{t.battery.title}</Text>
-            <Text style={styles.cardText}>{t.battery.body}</Text>
-            {t.battery.tips.map((tip) => (
+            <Text style={styles.cardTitle}>{t("permissions.batteryTitle")}</Text>
+            <Text style={styles.cardText}>{t("permissions.batteryBody")}</Text>
+            {lines("permissions.batteryTips").map((tip) => (
               <View key={tip} style={styles.bulletRow}>
                 <Text style={styles.bullet}>•</Text>
                 <Text style={styles.stepText}>{tip}</Text>
@@ -206,14 +240,16 @@ export default function PermissionsScreen() {
               }}
               accessibilityRole="button"
             >
-              <Text style={styles.secondaryButtonText}>{t.battery.button}</Text>
+              <Text style={styles.secondaryButtonText}>{t("permissions.batteryButton")}</Text>
             </TouchableOpacity>
           </View>
         )}
       </ScrollView>
 
       <View style={styles.footer}>
-        {gate && !gate.canContinue && <Text style={styles.footerHint}>{t.continueHint}</Text>}
+        {gate && !gate.canContinue && (
+          <Text style={styles.footerHint}>{t("permissions.continueHint")}</Text>
+        )}
         <TouchableOpacity
           style={[styles.primaryButton, !gate?.canContinue && styles.primaryButtonDisabled]}
           onPress={() => void handleContinue()}
@@ -225,7 +261,9 @@ export default function PermissionsScreen() {
             <ActivityIndicator color="#ffffff" />
           ) : (
             <Text style={styles.primaryButtonText}>
-              {hasSession || returnTo === "back" ? t.continue : t.continueToLogin}
+              {hasSession || returnTo === "back"
+                ? t("permissions.continue")
+                : t("permissions.continueToLogin")}
             </Text>
           )}
         </TouchableOpacity>
@@ -247,16 +285,17 @@ function PermissionCard({
   disabled: boolean;
   onPress: () => void;
 }) {
+  const { t } = useTranslation();
   const text = itemText(item.key);
   const steps = guideSteps(item.guide);
   const badge =
     item.status === "granted"
-      ? { label: t.statusGranted, style: styles.badgeGranted }
+      ? { label: t("permissions.statusGranted"), style: styles.badgeGranted }
       : item.status === "waiting"
-        ? { label: t.statusWaiting, style: styles.badgeWaiting }
+        ? { label: t("permissions.statusWaiting"), style: styles.badgeWaiting }
         : item.status === "notAvailable"
-          ? { label: t.statusNotAvailable, style: styles.badgeWaiting }
-          : { label: t.statusMissing, style: styles.badgeMissing };
+          ? { label: t("permissions.statusNotAvailable"), style: styles.badgeWaiting }
+          : { label: t("permissions.statusMissing"), style: styles.badgeMissing };
   const showButton = item.status === "ask" || item.status === "settings";
 
   return (
@@ -267,7 +306,7 @@ function PermissionCard({
       </View>
       <Text style={styles.cardText}>{text.reason}</Text>
       {item.status === "notAvailable" && (
-        <Text style={styles.noteText}>{t.backgroundLocation.expoGo}</Text>
+        <Text style={styles.noteText}>{t("permissions.backgroundExpoGo")}</Text>
       )}
       {showButton &&
         steps.map((step, index) => (
@@ -287,7 +326,7 @@ function PermissionCard({
             <ActivityIndicator color="#ffffff" />
           ) : (
             <Text style={styles.itemButtonText}>
-              {item.status === "settings" ? t.openSettings : text.button}
+              {item.status === "settings" ? t("common.openSettings") : text.button}
             </Text>
           )}
         </TouchableOpacity>
@@ -299,7 +338,8 @@ function PermissionCard({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f9fafb" },
   content: { padding: 20, paddingBottom: 32 },
-  title: { fontSize: 26, fontWeight: "bold", color: "#111827", marginTop: 8 },
+  titleRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 12 },
+  title: { flexShrink: 1, fontSize: 26, fontWeight: "bold", color: "#111827", marginTop: 8 },
   intro: { fontSize: 15, color: "#4b5563", lineHeight: 22, marginTop: 6, marginBottom: 16 },
   disclosure: {
     backgroundColor: "#eef2ff",

@@ -2,6 +2,7 @@ import React, { useEffect } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
+import { languageReady } from "../i18n";
 import { hasCompletedOnboarding } from "../utils/onboarding";
 import { decideStartRoute } from "../utils/permissionGate";
 import { checkPermissionGate } from "../utils/permissions";
@@ -21,6 +22,8 @@ export default function EntryScreen() {
 
   useEffect(() => {
     const route = async () => {
+      // The worker's saved language, so the first screen is not shown in another one.
+      await languageReady;
       const onboardingDone = await hasCompletedOnboarding();
       const [gate, token] = onboardingDone
         ? await Promise.all([

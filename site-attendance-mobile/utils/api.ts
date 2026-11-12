@@ -4,7 +4,6 @@ import { stopBackgroundGeofenceMonitoring } from "./backgroundGeofence";
 import { recordServerTime } from "./serverClock";
 
 export const SESSION_EXPIRED_REASON = "session-expired";
-export const SESSION_EXPIRED_MESSAGE = "Your session expired. Please log in again.";
 
 // Everything tied to the signed-in worker; cleared together when the session ends.
 const SESSION_KEYS = [
@@ -41,7 +40,7 @@ export function getApiBaseUrl(): string {
  */
 export class SessionExpiredError extends Error {
   constructor() {
-    super(SESSION_EXPIRED_MESSAGE);
+    super("Session expired");
     this.name = "SessionExpiredError";
   }
 }
